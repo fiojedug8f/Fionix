@@ -1,0 +1,823 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta name="color-scheme" content="dark">
+  <meta name="theme-color" content="#121212">
+
+  <title>Fionix — лаунчер Minecraft для Windows 10/11</title>
+  <meta name="description" content="Fionix — современный лаунчер Minecraft с аккаунтами Microsoft, LittleSkin и Ely.by, магазином Modrinth и CurseForge, умными сборками, 3D-скинами и полной кастомизацией.">
+  <meta name="robots" content="index, follow">
+
+  <!-- После публикации замените URL на свой адрес GitHub Pages, если он отличается. -->
+  <link rel="canonical" href="https://fiojedug8f.github.io/Fionix/">
+  <meta property="og:type" content="website">
+  <meta property="og:locale" content="ru_RU">
+  <meta property="og:title" content="Fionix — Твой идеальный лаунчер Minecraft">
+  <meta property="og:description" content="Аккаунты, магазин сборок, умная оптимизация, 3D-скины и кастомизация. Fionix для Windows 10/11.">
+  <meta property="og:url" content="https://fiojedug8f.github.io/Fionix/">
+  <meta property="og:image" content="https://fiojedug8f.github.io/Fionix/assets/screenshot-midnight.png">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Fionix — Твой идеальный лаунчер Minecraft">
+  <meta name="twitter:description" content="Современный лаунчер Minecraft для Windows 10/11.">
+  <meta name="twitter:image" content="https://fiojedug8f.github.io/Fionix/assets/screenshot-midnight.png">
+
+  <!--
+    ИСТОЧНИКИ ИЗОБРАЖЕНИЙ
+    Исходники находятся в C:\Users\fioje\OneDrive\Рабочий стол\Fionix_Final_Release\1_GitHub_Source.
+    Копии и производные лежат рядом с index.html в папке assets/, чтобы сайт корректно
+    работал на GitHub Pages без абсолютных путей Windows.
+
+    assets/fionix-mark.png              — прозрачная версия assets/icons/fionix.png (создана из оригинала)
+    assets/fionix.png                   — assets/icons/fionix.png (исходная иконка приложения)
+    assets/fionix.ico                   — assets/icons/fionix.ico (favicon)
+    assets/screenshot-midnight.png      — docs/screenshot-midnight.png (главный экран, фиолетовый акцент)
+    assets/screenshot.png               — docs/screenshot.png (главный экран)
+    assets/screenshot-welcome.png       — docs/screenshot-welcome.png (вход; сторонний модпак зацензурен)
+    assets/screenshot-create.png        — docs/screenshot-create.png (создание; фон с модпаком зацензурен)
+    assets/screenshot-instance.png      — docs/screenshot-instance.png (страница экземпляра)
+    assets/screenshot-store.png         — docs/screenshot-store.png (магазин сборок)
+    assets/screenshot-settings.png      — docs/screenshot-settings.png (настройки)
+    assets/screenshot-skin3d-card.png   — обрезанная docs/screenshot-skin3d.png (3D-просмотр скина)
+  -->
+
+  <link rel="icon" href="assets/fionix.ico" sizes="any">
+  <link rel="apple-touch-icon" href="assets/fionix.png">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300..800&display=swap" rel="stylesheet">
+  <script>document.documentElement.classList.add("js");</script>
+  <link rel="stylesheet" href="style.css">
+  <script src="script.js" defer></script>
+</head>
+<body>
+  <a class="skip-link" href="#main">Перейти к содержимому</a>
+
+  <!-- SVG-спрайт: иконки нарисованы в стиле набора src/ui/icons.py проекта Fionix. -->
+  <svg class="svg-sprite" xmlns="http://www.w3.org/2000/svg" aria-hidden="true" focusable="false">
+    <symbol id="i-download" viewBox="0 0 24 24">
+      <path d="M12 3v11m0 0 4.25-4.25M12 14 7.75 9.75M4 17.5v1.25A2.25 2.25 0 0 0 6.25 21h11.5A2.25 2.25 0 0 0 20 18.75V17.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-arrow-right" viewBox="0 0 24 24">
+      <path d="M4 12h15m0 0-5.5-5.5M19 12l-5.5 5.5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-chevron-down" viewBox="0 0 24 24">
+      <path d="m6 9 6 6 6-6" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-chevron-left" viewBox="0 0 24 24">
+      <path d="m15 5-7 7 7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-chevron-right" viewBox="0 0 24 24">
+      <path d="m9 5 7 7-7 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-close" viewBox="0 0 24 24">
+      <path d="M6 6l12 12M18 6 6 18" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-expand" viewBox="0 0 24 24">
+      <path d="M9 4H4v5M15 4h5v5M20 15v5h-5M4 15v5h5" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-check" viewBox="0 0 24 24">
+      <path d="m5 12.5 4.25 4.25L19 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-store" viewBox="0 0 24 24">
+      <path d="M4.5 9.5h15l-.8 9.25a1.75 1.75 0 0 1-1.74 1.6H7.04a1.75 1.75 0 0 1-1.74-1.6L4.5 9.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="M8.5 9.5V7.75a3.5 3.5 0 1 1 7 0V9.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-layers" viewBox="0 0 24 24">
+      <path d="m12 3 8.5 4.5L12 12 3.5 7.5 12 3Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="m4 11.75 8 4.25 8-4.25M4 16.25l8 4.25 8-4.25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-cube" viewBox="0 0 24 24">
+      <path d="m12 2.75 8 4.5v9.5l-8 4.5-8-4.5v-9.5l8-4.5Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="m4.25 7.4 7.75 4.35 7.75-4.35M12 11.75v9.25" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-user" viewBox="0 0 24 24">
+      <circle cx="12" cy="8" r="3.5" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <path d="M4.75 20a7.25 7.25 0 0 1 14.5 0" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-palette" viewBox="0 0 24 24">
+      <path d="M12 3a9 9 0 0 0 0 18h1.5a2 2 0 0 0 0-4H13a2 2 0 0 1 0-4h4.5A3.5 3.5 0 0 0 21 9.5C21 5.9 16.97 3 12 3Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      <circle cx="7.6" cy="9" r="1" fill="currentColor"/><circle cx="10.2" cy="6.7" r="1" fill="currentColor"/><circle cx="14" cy="6.8" r="1" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-package" viewBox="0 0 24 24">
+      <path d="M4 7.4 12 3l8 4.4v9.2L12 21l-8-4.4V7.4Z" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+      <path d="m4.25 7.5 7.75 4.3 7.75-4.3M12 11.8V21M8 5.2l8 4.4" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-cloud-download" viewBox="0 0 24 24">
+      <path d="M7.25 18.5a4.25 4.25 0 0 1-.5-8.47A5.75 5.75 0 0 1 18 9.3a4.6 4.6 0 0 1 1.25 9.2" fill="none" stroke="currentColor" stroke-width="1.55" stroke-linecap="round"/>
+      <path d="M12 12.25v8.5m0 0 3-3m-3 3-3-3" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+    <symbol id="i-sparkles" viewBox="0 0 24 24">
+      <path d="M12 3.25c.55 4.2 2.55 6.2 6.75 6.75-4.2.55-6.2 2.55-6.75 6.75C11.45 12.55 9.45 10.55 5.25 10c4.2-.55 6.2-2.55 6.75-6.75Z" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linejoin="round"/>
+      <path d="M18.5 15.5c.22 1.7 1.05 2.53 2.75 2.75-1.7.22-2.53 1.05-2.75 2.75-.22-1.7-1.05-2.53-2.75-2.75 1.7-.22 2.53-1.05 2.75-2.75Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-music" viewBox="0 0 24 24">
+      <path d="M9.5 18V6.25l9-1.75v11.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+      <circle cx="6.75" cy="18" r="2.75" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <circle cx="15.75" cy="16" r="2.75" fill="none" stroke="currentColor" stroke-width="1.6"/>
+    </symbol>
+    <symbol id="i-monitor" viewBox="0 0 24 24">
+      <rect x="3" y="4.25" width="18" height="13" rx="2.25" fill="none" stroke="currentColor" stroke-width="1.6"/>
+      <path d="M9 21h6M12 17.5V21" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+    </symbol>
+    <symbol id="i-windows" viewBox="0 0 24 24">
+      <path d="M3 5.5 10.5 4.4v7.1H3V5.5Zm8.5-1.3L21 3v8.5h-9.5V4.2ZM3 12.5h7.5v7.1L3 18.5v-6Zm8.5 0H21V21l-9.5-1.3v-7.2Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-github" viewBox="0 0 24 24">
+      <path d="M12 .5C5.73.5.5 5.73.5 12c0 5.08 3.29 9.39 7.86 10.91.58.11.79-.25.79-.56v-2.17c-3.2.7-3.87-1.36-3.87-1.36-.52-1.33-1.28-1.68-1.28-1.68-1.05-.72.08-.7.08-.7 1.16.08 1.77 1.19 1.77 1.19 1.03 1.77 2.7 1.26 3.36.96.1-.75.4-1.26.73-1.55-2.55-.29-5.23-1.28-5.23-5.69 0-1.26.45-2.29 1.19-3.1-.12-.29-.52-1.46.11-3.05 0 0 .97-.31 3.18 1.18a11.1 11.1 0 0 1 5.8 0c2.2-1.49 3.17-1.18 3.17-1.18.63 1.59.23 2.76.11 3.05.74.81 1.19 1.84 1.19 3.1 0 4.42-2.69 5.39-5.25 5.67.41.35.78 1.05.78 2.12v3.14c0 .31.21.68.8.56A11.51 11.51 0 0 0 23.5 12C23.5 5.73 18.27.5 12 .5Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-discord" viewBox="0 0 24 24">
+      <path d="M20.32 4.37a19.8 19.8 0 0 0-4.89-1.52.07.07 0 0 0-.08.04c-.21.38-.44.87-.6 1.25a18.3 18.3 0 0 0-5.5 0 12.6 12.6 0 0 0-.61-1.25.08.08 0 0 0-.08-.04c-1.7.29-3.35.8-4.88 1.52a.07.07 0 0 0-.03.03C.53 9.05-.32 13.58.1 18.06a.08.08 0 0 0 .03.05 19.9 19.9 0 0 0 5.99 3.03.08.08 0 0 0 .08-.03c.46-.63.87-1.3 1.22-2a.08.08 0 0 0-.04-.11 13.1 13.1 0 0 1-1.87-.89.08.08 0 0 1-.01-.13c.13-.1.25-.2.37-.31a.07.07 0 0 1 .08-.01c3.93 1.79 8.18 1.79 12.06 0a.07.07 0 0 1 .08.01c.12.11.25.21.37.31a.08.08 0 0 1-.01.13c-.6.35-1.22.64-1.87.89a.08.08 0 0 0-.04.11c.36.7.77 1.37 1.22 2a.08.08 0 0 0 .08.03 19.84 19.84 0 0 0 6-3.03.08.08 0 0 0 .03-.05c.5-5.18-.84-9.68-3.55-13.66a.06.06 0 0 0-.03-.03ZM8.02 15.33c-1.18 0-2.16-1.08-2.16-2.42 0-1.33.96-2.42 2.16-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.96 2.42-2.16 2.42Zm7.97 0c-1.18 0-2.16-1.08-2.16-2.42 0-1.33.96-2.42 2.16-2.42 1.21 0 2.18 1.1 2.16 2.42 0 1.34-.95 2.42-2.16 2.42Z" fill="currentColor"/>
+    </symbol>
+    <symbol id="i-tray" viewBox="0 0 24 24">
+      <path d="M4 15.25v2.5A2.25 2.25 0 0 0 6.25 20h11.5A2.25 2.25 0 0 0 20 17.75v-2.5M8.25 10 12 13.75 15.75 10M12 3v10.5" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+    </symbol>
+  </svg>
+
+  <div class="page-glow" aria-hidden="true"></div>
+
+  <header class="site-header" id="siteHeader">
+    <div class="header-inner">
+      <a class="brand" href="#top" aria-label="Fionix — на главную">
+        <!-- assets/fionix-mark.png = прозрачная версия assets/icons/fionix.png -->
+        <img class="brand-mark" src="assets/fionix-mark.png" alt="" width="40" height="40" decoding="async">
+        <span class="brand-text">
+          <span class="brand-name">Fionix</span>
+          <span class="brand-caption">Minecraft Launcher</span>
+        </span>
+      </a>
+
+      <nav class="desktop-nav" aria-label="Основная навигация">
+        <a class="nav-link" href="#features">Возможности</a>
+        <a class="nav-link" href="#screenshots">Скриншоты</a>
+        <a class="nav-link" href="#download">Скачать</a>
+      </nav>
+
+      <div class="header-actions">
+        <!-- Версия подставляется из latest release GitHub API в script.js. -->
+        <span class="version-pill" title="Последняя версия Fionix">
+          <span class="status-dot" aria-hidden="true"></span><span data-release-tag>v1.5</span>
+        </span>
+
+        <!--
+          ССЫЛКА НА СКАЧИВАНИЕ
+          href ниже — резервный прямой адрес последнего установщика GitHub.
+          script.js запрашивает последний релиз через GitHub API, подставляет
+          точный versioned URL (например, .../download/v1.5/Fionix_Setup.exe)
+          и обновляет все версии на странице. Вручную менять ссылку не нужно.
+        -->
+        <a class="btn btn--primary btn--sm header-download"
+           href="https://github.com/fiojedug8f/Fionix/releases/latest/download/Fionix_Setup.exe"
+           data-download
+           aria-label="Скачать Fionix для Windows">
+          <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>
+          <span>Скачать</span>
+        </a>
+
+        <button class="menu-toggle" id="menuToggle" type="button"
+                aria-label="Открыть меню" aria-controls="mobileMenu" aria-expanded="false">
+          <span></span><span></span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <div class="mobile-menu-backdrop" id="menuBackdrop" aria-hidden="true"></div>
+
+  <div class="mobile-menu" id="mobileMenu" aria-hidden="true" inert>
+    <nav class="mobile-nav" aria-label="Мобильная навигация">
+      <a href="#features"><span>Возможности</span><svg class="icon" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
+      <a href="#screenshots"><span>Скриншоты</span><svg class="icon" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
+      <a href="#download"><span>Скачать</span><svg class="icon" aria-hidden="true"><use href="#i-arrow-right"/></svg></a>
+    </nav>
+    <a class="btn btn--primary mobile-menu__download"
+       href="https://github.com/fiojedug8f/Fionix/releases/latest/download/Fionix_Setup.exe"
+       data-download>
+      <svg class="icon" aria-hidden="true"><use href="#i-windows"/></svg>
+      Скачать для Windows
+    </a>
+    <p class="mobile-menu__meta">Windows 10/11 · версия <span data-release-version>1.5</span></p>
+  </div>
+
+  <main id="main">
+    <!-- ============================= HERO ============================= -->
+    <section class="hero" id="top" aria-labelledby="hero-title">
+      <div class="hero-background" aria-hidden="true">
+        <span class="hero-orb hero-orb--violet"></span>
+        <span class="hero-orb hero-orb--cyan"></span>
+        <span class="hero-grid"></span>
+      </div>
+
+      <div class="container hero-layout">
+        <div class="hero-copy">
+          <div class="hero-eyebrow">
+            <span class="status-dot" aria-hidden="true"></span>
+            <span>Minecraft Java Edition</span>
+            <span class="eyebrow-separator" aria-hidden="true"></span>
+            <span>Windows 10/11</span>
+          </div>
+
+          <h1 class="hero-title" id="hero-title">
+            Fionix — Твой<br>
+            <span class="text-gradient">идеальный</span> лаунчер<br>
+            Minecraft
+          </h1>
+
+          <p class="hero-lead">
+            Аккаунты Microsoft, LittleSkin, Ely.by и гостевой режим. Магазин Modrinth
+            и CurseForge, умные сборки, 3D-скины и полная кастомизация — в одном
+            лаунчере для Windows.
+          </p>
+
+          <div class="hero-actions">
+            <a class="btn btn--primary btn--lg"
+               href="https://github.com/fiojedug8f/Fionix/releases/latest/download/Fionix_Setup.exe"
+               data-download>
+              <svg class="icon" aria-hidden="true"><use href="#i-windows"/></svg>
+              <span>Скачать для Windows</span>
+              <svg class="icon btn-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </a>
+            <a class="btn btn--ghost btn--lg" href="#features">
+              <span>Смотреть возможности</span>
+              <svg class="icon" aria-hidden="true"><use href="#i-chevron-down"/></svg>
+            </a>
+          </div>
+
+          <ul class="hero-meta" aria-label="Коротко о лаунчере">
+            <li><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Установщик и portable</li>
+          </ul>
+        </div>
+
+        <div class="hero-visual">
+          <div class="hero-halo" aria-hidden="true"></div>
+
+          <figure class="app-preview" data-tilt data-reveal>
+            <div class="app-titlebar" aria-hidden="true">
+              <div class="app-title">
+                <span class="app-title__mark"></span>
+                <span>Fionix</span>
+                <span class="app-title__muted">Minecraft Launcher</span>
+              </div>
+              <div class="window-controls">
+                <span class="window-control window-control--min"></span>
+                <span class="window-control window-control--max"></span>
+                <span class="window-control window-control--close"></span>
+              </div>
+            </div>
+            <div class="app-screen">
+              <!-- assets/screenshot-midnight.png = docs/screenshot-midnight.png -->
+              <img src="assets/screenshot-midnight.png"
+                   alt="Интерфейс Fionix: главный экран с приветствием, кнопкой создания сборки и фиолетовым акцентом"
+                   width="1440" height="900" fetchpriority="high" decoding="async">
+              <span class="screen-glare" aria-hidden="true"></span>
+            </div>
+            <figcaption class="sr-only">Главное окно лаунчера Fionix с фиолетовой темой оформления.</figcaption>
+          </figure>
+
+          <div class="hero-float hero-float--store" aria-hidden="true">
+            <span class="float-icon float-icon--violet">
+              <svg class="icon"><use href="#i-store"/></svg>
+            </span>
+            <span>
+              <strong>Modrinth + CurseForge</strong>
+              <small>Магазин сборок</small>
+            </span>
+          </div>
+
+          <div class="hero-float hero-float--skins" aria-hidden="true">
+            <span class="float-icon float-icon--cyan">
+              <svg class="icon"><use href="#i-cube"/></svg>
+            </span>
+            <span>
+              <strong>3D-скины</strong>
+              <small>Вращение и масштаб</small>
+            </span>
+          </div>
+        </div>
+      </div>
+
+      <div class="container">
+        <div class="tech-strip" data-reveal>
+          <span class="tech-strip__label">
+            <svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg>
+            6 ядер
+          </span>
+          <ul class="tech-list" aria-label="Поддерживаемые ядра">
+            <li>Vanilla</li>
+            <li>Forge</li>
+            <li>NeoForge</li>
+            <li>Fabric</li>
+            <li>Quilt</li>
+            <li>OptiFine</li>
+          </ul>
+          <span class="tech-strip__note">Release · Snapshot · Beta · Alpha</span>
+        </div>
+      </div>
+    </section>
+
+    <!-- ========================== ВОЗМОЖНОСТИ ========================== -->
+    <section class="section" id="features" aria-labelledby="features-title">
+      <div class="container">
+        <div class="section-heading" data-reveal>
+          <span class="section-kicker"><span aria-hidden="true"></span>Возможности</span>
+          <div class="section-heading__row">
+            <h2 id="features-title">Всё, что нужно.<br><span class="text-dim">Ничего лишнего.</span></h2>
+            <p>
+              От первого входа в аккаунт до запуска собственной сборки — Fionix
+              закрывает рутину и оставляет вам саму игру.
+            </p>
+          </div>
+        </div>
+
+        <div class="bento-grid">
+          <!-- Карточка 1: магазин сборок. Данные и функции из README, раздел «Магазин». -->
+          <article class="glass-card feature-card card--store" data-reveal>
+            <div class="card-top">
+              <span class="feature-icon feature-icon--violet">
+                <svg class="icon" aria-hidden="true"><use href="#i-store"/></svg>
+              </span>
+              <span class="tag"><span class="status-dot" aria-hidden="true"></span>2 каталога</span>
+            </div>
+            <h3>Магазин сборок прямо в лаунчере</h3>
+            <p>
+              Ищите модпаки на Modrinth и CurseForge, смотрите автора, загрузки,
+              версию игры и список модов. Установка сразу создаёт отдельный экземпляр.
+            </p>
+
+            <div class="store-demo" aria-hidden="true">
+              <div class="store-demo__toolbar">
+                <span class="demo-search">
+                  <span class="demo-search__dot"></span>
+                  Поиск сборок
+                </span>
+                <span class="demo-source">Modrinth <svg class="icon"><use href="#i-chevron-down"/></svg></span>
+                <span class="demo-find">Найти</span>
+              </div>
+              <div class="store-demo__grid">
+                <div class="pack-card">
+                  <div class="pack-card__top">
+                    <span class="pack-icon">FO</span>
+                    <span class="pack-card__install">Установить</span>
+                  </div>
+                  <strong>Fabulously Optimized</strong>
+                  <small>19,2 млн загрузок · Fabric</small>
+                </div>
+                <div class="pack-card">
+                  <div class="pack-card__top">
+                    <span class="pack-icon pack-icon--cyan">BMC</span>
+                    <span class="pack-card__install">Установить</span>
+                  </div>
+                  <strong>Better MC</strong>
+                  <small>3,7 млн загрузок · Forge</small>
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Карточка 2: оптимизация при создании сборки (README, «Ядра и оптимизация»). -->
+          <article class="glass-card feature-card card--builds" data-reveal style="--delay: .06s">
+            <div class="card-top">
+              <span class="feature-icon feature-icon--cyan">
+                <svg class="icon" aria-hidden="true"><use href="#i-layers"/></svg>
+              </span>
+              <span class="tag">Авто</span>
+            </div>
+            <h3>Сборка уже оптимизирована</h3>
+            <p>
+              Один чекбокс добавляет проверенный набор модов для стабильного FPS.
+              Без галочки Fionix не скачает ничего лишнего.
+            </p>
+            <div class="build-demo" aria-hidden="true">
+              <div class="build-row">
+                <span class="core-tag core-tag--fabric">Fabric</span>
+                <span class="build-plus">+</span>
+                <span class="mod-tag">Sodium</span>
+                <span class="mod-tag">Lithium</span>
+                <span class="mod-tag">FerriteCore</span>
+              </div>
+              <div class="build-row">
+                <span class="core-tag core-tag--forge">Forge</span>
+                <span class="build-plus">+</span>
+                <span class="mod-tag">Embeddium</span>
+                <span class="mod-tag">Oculus</span>
+              </div>
+            </div>
+            <div class="card-note"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Vanilla, Forge, NeoForge, Fabric, Quilt, OptiFine</div>
+          </article>
+
+          <!-- Карточка 3: 3D-скины. Изображение из docs/screenshot-skin3d.png. -->
+          <article class="glass-card feature-card card--skins" data-reveal style="--delay: .12s">
+            <div class="card-top">
+              <span class="feature-icon feature-icon--pink">
+                <svg class="icon" aria-hidden="true"><use href="#i-cube"/></svg>
+              </span>
+              <span class="tag">3D</span>
+            </div>
+            <h3>Скин, который можно рассмотреть</h3>
+            <p>
+              Загрузите PNG — Fionix покажет базовый и внешний слой одежды
+              с анимацией ходьбы. Скины LittleSkin и Ely.by подтянутся сами.
+            </p>
+            <div class="skin-preview">
+              <!--
+                assets/screenshot-skin3d-card.png — производная от docs/screenshot-skin3d.png:
+                обрезаны служебный заголовок и подпись, чтобы в карточке остался только 3D-просмотрщик.
+              -->
+              <img src="assets/screenshot-skin3d-card.png"
+                   alt="3D-просмотрщик скина в Fionix"
+                   width="692" height="524" loading="lazy" decoding="async">
+              <span class="skin-hint">Вращение · масштаб</span>
+            </div>
+          </article>
+
+          <!-- Карточка 4: аккаунты (README, «Аккаунты и профиль»). -->
+          <article class="glass-card feature-card card--accounts" data-reveal>
+            <div class="card-top">
+              <span class="feature-icon feature-icon--blue">
+                <svg class="icon" aria-hidden="true"><use href="#i-user"/></svg>
+              </span>
+              <span class="tag">4 способа входа</span>
+            </div>
+            <h3>Все аккаунты — в одном месте</h3>
+            <p>
+              Microsoft, LittleSkin, Ely.by и гостевой профиль. Переключайтесь
+              между ними в сайдбаре без повторного входа.
+            </p>
+            <div class="account-grid" aria-hidden="true">
+              <span class="account-chip">
+                <span class="account-logo account-logo--ms"><i></i><i></i><i></i><i></i></span>
+                Microsoft
+              </span>
+              <span class="account-chip">
+                <span class="account-logo account-logo--ls">LS</span>
+                LittleSkin
+              </span>
+              <span class="account-chip">
+                <span class="account-logo account-logo--ely">E</span>
+                Ely.by
+              </span>
+              <span class="account-chip">
+                <span class="account-logo account-logo--guest">
+                  <svg class="icon"><use href="#i-user"/></svg>
+                </span>
+                Гость
+              </span>
+            </div>
+            <div class="card-note"><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Пароли не сохраняются на диске</div>
+          </article>
+
+          <!-- Карточка 5: кастомизация (README, «Кастомизация»). -->
+          <article class="glass-card feature-card card--themes" data-reveal style="--delay: .06s">
+            <div class="card-top">
+              <span class="feature-icon feature-icon--violet">
+                <svg class="icon" aria-hidden="true"><use href="#i-palette"/></svg>
+              </span>
+              <span class="tag">Под себя</span>
+            </div>
+            <h3>Лаунчер под твой вкус</h3>
+            <p>
+              Акцентный цвет, собственные цвета текста и панелей, авто-контраст,
+              картинка или MP4-видео до 10 МБ на фоне.
+            </p>
+            <div class="theme-demo">
+              <div class="theme-demo__bar">
+                <span class="theme-demo__title">Fionix Dark</span>
+                <span class="theme-demo__lights"><i></i><i></i><i></i></span>
+              </div>
+              <div class="theme-demo__body">
+                <div class="theme-demo__side">
+                  <span></span><span></span><span></span>
+                </div>
+                <div class="theme-demo__content">
+                  <span class="theme-demo__line theme-demo__line--wide"></span>
+                  <span class="theme-demo__line"></span>
+                  <span class="theme-demo__button">Играть</span>
+                </div>
+              </div>
+              <div class="theme-swatches" aria-label="Демонстрация акцентного цвета">
+                <button class="swatch is-active" type="button" data-accent="violet" aria-label="Фиолетовый акцент" aria-pressed="true"><span style="--swatch: #8b5cf6"></span></button>
+                <button class="swatch" type="button" data-accent="blue" aria-label="Синий акцент" aria-pressed="false"><span style="--swatch: #4f8cff"></span></button>
+                <button class="swatch" type="button" data-accent="cyan" aria-label="Бирюзовый акцент" aria-pressed="false"><span style="--swatch: #22d3ee"></span></button>
+                <span class="swatch-label" id="swatchLabel">Fionix Violet</span>
+                <span class="theme-volume" aria-hidden="true"><i></i></span>
+              </div>
+            </div>
+          </article>
+
+          <!-- Карточка 6: экспорт/импорт .fionixpack (README, «Сборки»). -->
+          <article class="glass-card feature-card card--packs" data-reveal style="--delay: .12s">
+            <div class="card-top">
+              <span class="feature-icon feature-icon--cyan">
+                <svg class="icon" aria-hidden="true"><use href="#i-package"/></svg>
+              </span>
+              <span class="tag">1 файл</span>
+            </div>
+            <h3>Поделиться сборкой — одним файлом</h3>
+            <p>
+              Экспорт в <code>.fionixpack</code> и импорт в изолированный экземпляр.
+              Моды скачаются последовательно — получателю не придётся собирать всё вручную.
+            </p>
+            <div class="pack-file" aria-hidden="true">
+              <span class="pack-file__icon">
+                <svg class="icon"><use href="#i-package"/></svg>
+              </span>
+              <span class="pack-file__info">
+                <strong>MyWorld.fionixpack</strong>
+                <small>Экспорт · импорт · все моды</small>
+              </span>
+              <span class="pack-file__status">готов</span>
+            </div>
+          </article>
+
+          <!-- Карточка 7: фоновые загрузки и трей (README, «Загрузки», «Системная логика»). -->
+          <article class="glass-card feature-card card--downloads" data-reveal>
+            <div class="card-top">
+              <span class="feature-icon feature-icon--blue">
+                <svg class="icon" aria-hidden="true"><use href="#i-cloud-download"/></svg>
+              </span>
+              <span class="tag">Фоновые задачи</span>
+            </div>
+            <div class="card-split">
+              <div class="card-split__copy">
+                <h3>Загрузки не мешают играть</h3>
+                <p>
+                  Версии, модпаки и импорт выполняются в фоне. Прогресс и скорость
+                  видны в отдельной панели, а лаунчер можно свернуть в трей.
+                </p>
+                <div class="card-note"><svg class="icon" aria-hidden="true"><use href="#i-tray"/></svg>Minecraft скроется, а окно вернётся после закрытия игры</div>
+              </div>
+
+              <div class="download-demo" aria-hidden="true">
+                <div class="download-demo__head">
+                  <span>Активные загрузки</span>
+                  <span class="download-demo__count">3</span>
+                </div>
+                <div class="download-row">
+                  <div class="download-row__text"><strong>Sodium</strong><span>готово</span></div>
+                  <div class="progress"><i style="--progress: 100%"></i></div>
+                </div>
+                <div class="download-row">
+                  <div class="download-row__text"><strong>Fabulously Optimized</strong><span>12,4 МБ/с</span></div>
+                  <div class="progress"><i style="--progress: 68%"></i></div>
+                </div>
+                <div class="download-row">
+                  <div class="download-row__text"><strong>Create Live 5</strong><span>8,1 МБ/с</span></div>
+                  <div class="progress"><i style="--progress: 34%"></i></div>
+                </div>
+                <div class="download-demo__foot">
+                  <span class="pulse-dot" aria-hidden="true"></span>
+                  Установка продолжится в фоне
+                </div>
+              </div>
+            </div>
+          </article>
+
+          <!-- Карточка 8: crash-диалог и музыкальный плеер (README, «Ошибки и музыка»). -->
+          <article class="glass-card feature-card card--care" data-reveal style="--delay: .06s">
+            <div class="card-top">
+              <span class="feature-icon feature-icon--pink">
+                <svg class="icon" aria-hidden="true"><use href="#i-sparkles"/></svg>
+              </span>
+              <span class="tag">Забота</span>
+            </div>
+            <h3>Помощь рядом. Музыка тоже.</h3>
+            <p>
+              Если игра упала, Fionix покажет лог и предложит спросить у ИИ.
+              Следит за RAM, предупредит при нехватке памяти, а встроенный
+              плеер скрасит ожидание загрузки.
+            </p>
+            <div class="care-stack" aria-hidden="true">
+              <div class="care-item care-item--crash">
+                <span class="care-item__icon"><svg class="icon"><use href="#i-sparkles"/></svg></span>
+                <span class="care-item__text"><strong>Crash-диалог</strong><small>Лог · причина · «Спросить у ИИ»</small></span>
+                <span class="care-item__badge">AI</span>
+              </div>
+              <div class="care-item care-item--music">
+                <span class="care-item__icon"><svg class="icon"><use href="#i-music"/></svg></span>
+                <span class="care-item__text"><strong>Fionix Player</strong><small>MP3 · плейлист · повтор</small></span>
+                <span class="equalizer"><i></i><i></i><i></i><i></i></span>
+              </div>
+              <div class="care-item care-item--ram">
+                <span class="care-item__icon"><svg class="icon"><use href="#i-monitor"/></svg></span>
+                <span class="care-item__text"><strong>RAM под контролем</strong><small>Предупреждение, если меньше 2 ГБ</small></span>
+                <span class="care-item__badge">RAM</span>
+              </div>
+            </div>
+          </article>
+        </div>
+      </div>
+    </section>
+
+    <!-- =========================== СКРИНШОТЫ =========================== -->
+    <section class="section gallery-section" id="screenshots" aria-labelledby="screenshots-title">
+      <div class="container">
+        <div class="section-heading section-heading--split" data-reveal>
+          <div>
+            <span class="section-kicker"><span aria-hidden="true"></span>Скриншоты</span>
+            <h2 id="screenshots-title">Посмотрите изнутри.</h2>
+          </div>
+          <p>
+            Никаких рендеров — только настоящий интерфейс Fionix. Нажмите на
+            любой экран, чтобы открыть его во весь размер.
+          </p>
+        </div>
+
+        <div class="gallery-grid" id="galleryGrid">
+          <button class="gallery-card" type="button" data-full="assets/screenshot.png"
+                  data-title="Главная"
+                  data-caption="Приветствие, создание сборки и список ваших экземпляров — всё на одном экране."
+                  aria-label="Открыть скриншот: Главная" aria-haspopup="dialog">
+            <!-- assets/screenshot.png = docs/screenshot.png -->
+            <img src="assets/screenshot.png" alt="Главный экран Fionix с приветствием и списком сборок" width="1440" height="900" loading="lazy" decoding="async">
+            <span class="gallery-caption"><span class="gallery-caption__index">01</span><span>Главная</span><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg></span>
+          </button>
+
+          <button class="gallery-card" type="button" data-full="assets/screenshot-welcome.png"
+                  data-title="Вход в аккаунт"
+                  data-caption="Microsoft, LittleSkin, Ely.by или гостевой профиль — выбор в один клик."
+                  aria-label="Открыть скриншот: Вход в аккаунт" aria-haspopup="dialog">
+            <!-- assets/screenshot-welcome.png = docs/screenshot-welcome.png; иконка и название стороннего модпака зацензурены -->
+            <img src="assets/screenshot-welcome.png" alt="Окно входа в аккаунт с четырьмя способами авторизации" width="1440" height="900" loading="lazy" decoding="async">
+            <span class="gallery-caption"><span class="gallery-caption__index">02</span><span>Вход в аккаунт</span><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg></span>
+          </button>
+
+          <button class="gallery-card" type="button" data-full="assets/screenshot-create.png"
+                  data-title="Новая сборка"
+                  data-caption="Версия Minecraft, ядро и умная оптимизация — один диалог до готового экземпляра."
+                  aria-label="Открыть скриншот: Новая сборка" aria-haspopup="dialog">
+            <!-- assets/screenshot-create.png = docs/screenshot-create.png; фон с иконкой и названием модпака зацензурен -->
+            <img src="assets/screenshot-create.png" alt="Диалог создания сборки с выбором версии, ядра и оптимизации" width="1440" height="900" loading="lazy" decoding="async">
+            <span class="gallery-caption"><span class="gallery-caption__index">03</span><span>Новая сборка</span><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg></span>
+          </button>
+
+          <button class="gallery-card" type="button" data-full="assets/screenshot-instance.png"
+                  data-title="Экземпляр"
+                  data-caption="Кнопка «Играть», моды, текстуры, шейдеры, карты, память и Java — под рукой."
+                  aria-label="Открыть скриншот: Экземпляр" aria-haspopup="dialog">
+            <!-- assets/screenshot-instance.png = docs/screenshot-instance.png -->
+            <img src="assets/screenshot-instance.png" alt="Страница экземпляра Fabric с кнопкой Играть и разделами контента" width="1440" height="900" loading="lazy" decoding="async">
+            <span class="gallery-caption"><span class="gallery-caption__index">04</span><span>Экземпляр</span><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg></span>
+          </button>
+
+          <button class="gallery-card" type="button" data-full="assets/screenshot-store.png"
+                  data-title="Магазин сборок"
+                  data-caption="Поиск по Modrinth и CurseForge, загрузки, версии и установка нового модпака."
+                  aria-label="Открыть скриншот: Магазин сборок" aria-haspopup="dialog">
+            <!-- assets/screenshot-store.png = docs/screenshot-store.png -->
+            <img src="assets/screenshot-store.png" alt="Магазин сборок Modrinth с поиском и карточками модпаков" width="1440" height="900" loading="lazy" decoding="async">
+            <span class="gallery-caption"><span class="gallery-caption__index">05</span><span>Магазин сборок</span><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg></span>
+          </button>
+
+          <button class="gallery-card" type="button" data-full="assets/screenshot-settings.png"
+                  data-title="Настройки"
+                  data-caption="Тема, акцентный цвет, видео-фон, снапшоты, аккаунты и прокси — в одном месте."
+                  aria-label="Открыть скриншот: Настройки" aria-haspopup="dialog">
+            <!-- assets/screenshot-settings.png = docs/screenshot-settings.png -->
+            <img src="assets/screenshot-settings.png" alt="Настройки оформления Fionix с выбором темы, акцента и фона" width="1440" height="900" loading="lazy" decoding="async">
+            <span class="gallery-caption"><span class="gallery-caption__index">06</span><span>Настройки</span><svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg></span>
+          </button>
+        </div>
+
+        <p class="gallery-hint" data-reveal>
+          <svg class="icon" aria-hidden="true"><use href="#i-expand"/></svg>
+          Клик — полноэкранный просмотр. Стрелки и Esc работают с клавиатуры.
+        </p>
+      </div>
+    </section>
+
+    <!-- ============================ СКАЧАТЬ ============================ -->
+    <section class="section download-section" id="download" aria-labelledby="download-title">
+      <div class="container">
+        <div class="download-panel" data-reveal>
+          <div class="download-panel__glow" aria-hidden="true"></div>
+          <div class="download-copy">
+            <span class="section-kicker"><span aria-hidden="true"></span>Скачать</span>
+            <h2 id="download-title">Твой идеальный мир<br>начинается здесь.</h2>
+            <p>
+              Fionix <span data-release-version>1.5</span> для Windows 10/11. Установите
+              лаунчер, войдите в аккаунт и создайте первую сборку — остальное Fionix
+              сделает сам.
+            </p>
+            <ul class="download-facts">
+              <li><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Установщик и портативная версия</li>
+              <li><svg class="icon" aria-hidden="true"><use href="#i-check"/></svg>Обновления из GitHub Releases</li>
+            </ul>
+          </div>
+
+          <div class="download-aside">
+            <div class="os-chip"><svg class="icon" aria-hidden="true"><use href="#i-windows"/></svg><span>Windows 10 / 11<small>x64 · Fionix <span data-release-version>1.5</span></small></span></div>
+
+            <!--
+              ОСНОВНАЯ ССЫЛКА НА СКАЧИВАНИЕ
+              href — прямой fallback на latest/download. После ответа GitHub API
+              script.js заменяет его на точный asset из последнего релиза.
+            -->
+            <a class="btn btn--primary btn--download"
+               href="https://github.com/fiojedug8f/Fionix/releases/latest/download/Fionix_Setup.exe"
+               data-download>
+              <svg class="icon" aria-hidden="true"><use href="#i-download"/></svg>
+              <span>Скачать для Windows</span>
+              <svg class="icon btn-arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </a>
+
+            <a class="download-secondary"
+               href="https://github.com/fiojedug8f/Fionix/releases"
+               target="_blank" rel="noopener noreferrer">
+              Все релизы на GitHub
+              <svg class="icon" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+            </a>
+
+            <p class="download-note">Minecraft не входит в установщик.</p>
+          </div>
+        </div>
+      </div>
+    </section>
+  </main>
+
+  <!-- ============================== ФУТЕР ============================== -->
+  <footer class="site-footer">
+    <div class="container">
+      <div class="footer-top">
+        <div class="footer-brand">
+          <a class="brand" href="#top" aria-label="Fionix — наверх">
+            <!-- assets/fionix-mark.png = прозрачная версия assets/icons/fionix.png -->
+            <img class="brand-mark" src="assets/fionix-mark.png" alt="" width="40" height="40" loading="lazy" decoding="async">
+            <span class="brand-text">
+              <span class="brand-name">Fionix</span>
+              <span class="brand-caption">Minecraft Launcher</span>
+            </span>
+          </a>
+          <p>Современный лаунчер Minecraft с аккаунтами, магазином сборок, 3D-скинами и кастомизацией.</p>
+        </div>
+
+        <nav class="footer-nav" aria-label="Навигация в футере">
+          <a href="#features">Возможности</a>
+          <a href="#screenshots">Скриншоты</a>
+          <a href="#download">Скачать</a>
+        </nav>
+
+        <div class="footer-socials">
+          <!-- GitHub проекта из config.py: GITHUB_REPO = "fiojedug8f/Fionix" -->
+          <a class="social-link" href="https://github.com/fiojedug8f/Fionix" target="_blank" rel="noopener noreferrer">
+            <svg class="icon" aria-hidden="true"><use href="#i-github"/></svg>
+            GitHub
+            <svg class="icon social-link__arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+          </a>
+
+          <!--
+            ССЫЛКА НА DISCORD
+            Пока стоит заглушка. Замените href на приглашение вашего сервера,
+            например https://discord.gg/abcdef, и удалите атрибут data-placeholder-link.
+          -->
+          <a class="social-link" href="#" data-placeholder-link="Discord">
+            <svg class="icon" aria-hidden="true"><use href="#i-discord"/></svg>
+            Discord
+            <svg class="icon social-link__arrow" aria-hidden="true"><use href="#i-arrow-right"/></svg>
+          </a>
+        </div>
+      </div>
+
+      <div class="footer-bottom">
+        <p>© <span id="year">2026</span> Fionix. Проект не имеет юридической силы. Это хобби-разработка.</p>
+        <p>Minecraft — торговая марка Mojang Studios. Сайт не связан с Mojang или Microsoft.</p>
+      </div>
+    </div>
+  </footer>
+
+  <!-- Лайтбокс для галереи. Управление: клик, стрелки, Esc, свайп. -->
+  <div class="lightbox" id="lightbox" role="dialog" aria-modal="true" aria-labelledby="lightboxTitle" aria-hidden="true" inert>
+    <div class="lightbox__backdrop" data-lightbox-close></div>
+
+    <div class="lightbox__dialog">
+      <div class="lightbox__top">
+        <span class="lightbox__count"><span id="lightboxIndex">01</span> <span class="lightbox__slash">/</span> <span id="lightboxTotal">06</span></span>
+        <button class="icon-button" type="button" data-lightbox-close aria-label="Закрыть полноэкранный просмотр">
+          <svg class="icon" aria-hidden="true"><use href="#i-close"/></svg>
+        </button>
+      </div>
+
+      <button class="lightbox__arrow lightbox__arrow--prev" type="button" data-lightbox-prev aria-label="Предыдущий скриншот">
+        <svg class="icon" aria-hidden="true"><use href="#i-chevron-left"/></svg>
+      </button>
+
+      <figure class="lightbox__figure">
+        <div class="lightbox__image-wrap">
+          <img id="lightboxImage" src="assets/screenshot.png" alt="" width="1440" height="900" decoding="async">
+        </div>
+        <figcaption class="lightbox__caption">
+          <span class="lightbox__kicker">Fionix Launcher</span>
+          <h3 id="lightboxTitle">Главная</h3>
+          <p id="lightboxDescription">Приветствие, создание сборки и список ваших экземпляров.</p>
+        </figcaption>
+      </figure>
+
+      <button class="lightbox__arrow lightbox__arrow--next" type="button" data-lightbox-next aria-label="Следующий скриншот">
+        <svg class="icon" aria-hidden="true"><use href="#i-chevron-right"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div class="toast" id="toast" role="status" aria-live="polite" aria-atomic="true"></div>
+</body>
+</html>
