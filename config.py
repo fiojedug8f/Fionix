@@ -23,7 +23,7 @@ MICROSOFT_SCOPE = "XboxLive.signin offline_access"
 # External links
 # ---------------------------------------------------------------------------
 DONATE_URL = "https://www.donationalerts.com/r/fioorange"
-GITHUB_REPO = ""
+GITHUB_REPO = "fiojedug8f/Fionix"
 GITHUB_API_URL = "https://api.github.com"
 CURSEFORGE_API_KEY = ""
 CURSEFORGE_CONSOLE_URL = "https://console.curseforge.com/"
