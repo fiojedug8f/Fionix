@@ -46,6 +46,15 @@ from src.ui.tasks import MarketInstallTask, MarketSearchTask
 from src.ui.widgets import CapsLabel, GlassComboBox, IconBadge, IconButton
 
 
+def format_count(value: int) -> str:
+    value = max(0, int(value or 0))
+    if value >= 1_000_000:
+        return f"{value / 1_000_000:.1f}M".replace(".0M", "M")
+    if value >= 1_000:
+        return f"{value / 1_000:.0f}K"
+    return str(value)
+
+
 class ModIcon(QWidget):
     """Small network-loaded icon with a graceful placeholder."""
 
@@ -180,11 +189,19 @@ class ModCard(QPushButton):
         name = QLabel(project.name)
         name.setObjectName("ModCardTitle")
         name.setWordWrap(True)
-        author = QLabel(f"{project.author} · {project.source}")
+        author = QLabel(project.author)
         author.setObjectName("Caption")
         title_column.addWidget(name)
         title_column.addWidget(author)
         top.addLayout(title_column, 1)
+        self.source_badge = QLabel(
+            "Modrinth" if project.source == "modrinth" else "CurseForge"
+        )
+        self.source_badge.setObjectName("SourceBadge")
+        self.source_badge.setProperty("source", project.source)
+        top.addWidget(
+            self.source_badge, 0, Qt.AlignmentFlag.AlignTop
+        )
         layout.addLayout(top)
         description = QLabel(project.description)
         description.setObjectName("ModCardText")
@@ -193,9 +210,12 @@ class ModCard(QPushButton):
         layout.addWidget(description)
         bottom = QHBoxLayout()
         bottom.setContentsMargins(0, 0, 0, 0)
-        bottom.setSpacing(7)
-        downloads = QLabel(f"{project.downloads:,} загрузок".replace(",", " "))
-        downloads.setObjectName("Caption")
+        bottom.setSpacing(6)
+        downloads = QLabel(f"↓ {format_count(project.downloads)}")
+        downloads.setObjectName("DownloadCount")
+        downloads.setToolTip(
+            f"{project.downloads:,} загрузок".replace(",", " ")
+        )
         bottom.addWidget(downloads, 1)
         self.spinner = LoadingSpinner(self)
         self.spinner.hide()
@@ -432,7 +452,7 @@ class MarketPage(Page):
         self._query = ""
         self._popular = False
         self._rows: list[ContentFileRow] = []
-        self._source = "modrinth"
+        self._source = "all"
         self._project_type = "mod"
 
         header = QHBoxLayout()
@@ -545,9 +565,9 @@ class MarketPage(Page):
         self.search_edit.returnPressed.connect(self.search)
         search_row.addWidget(self.search_edit, 1)
         self.source_combo = GlassComboBox()
+        self.source_combo.addItem("Все источники", "all")
         self.source_combo.addItem("Modrinth", "modrinth")
-        if self._api.curseforge_key:
-            self.source_combo.addItem("CurseForge", "curseforge")
+        self.source_combo.addItem("CurseForge", "curseforge")
         self.source_combo.setFixedWidth(160)
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         search_row.addWidget(self.source_combo, 0)
@@ -558,11 +578,6 @@ class MarketPage(Page):
         self.search_button.clicked.connect(self.search)
         search_row.addWidget(self.search_button)
         layout.addLayout(search_row)
-
-        if not self._api.curseforge_key:
-            note = QLabel("CurseForge временно недоступен")
-            note.setObjectName("Caption")
-            layout.addWidget(note)
 
         self.market_status = QLabel("Введите запрос или нажмите «Найти», чтобы увидеть моды.")
         self.market_status.setObjectName("Muted")
@@ -672,7 +687,7 @@ class MarketPage(Page):
     def _ensure_popular(self) -> None:
         if (
             self._instance is None
-            or self._source != "modrinth"
+            or self._source not in {"modrinth", "all"}
             or self._popular_loaded
             or self._search_task is not None
         ):
@@ -755,23 +770,15 @@ class MarketPage(Page):
         self._source = str(data or "modrinth")
         self._popular_loaded = False
         self._update_curseforge_panel()
-        if self._source == "curseforge" and not self._api.curseforge_key:
-            self.market_status.setText("CurseForge временно недоступен.")
-            self._clear_results()
-            self._projects = []
-            return
         self.market_status.setText("Нажмите «Найти», чтобы обновить результаты.")
 
     def search(self) -> None:
         if self._instance is None:
             return
-        if self._source == "curseforge" and not self._api.curseforge_key:
-            self.market_status.setText("CurseForge временно недоступен.")
-            return
         if self._search_task is not None:
             return
         query = self.search_edit.text().strip()
-        if not query and self._source == "modrinth":
+        if not query and self._source in {"modrinth", "all"}:
             self._popular_loaded = False
             self._ensure_popular()
             return

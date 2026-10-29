@@ -1,8 +1,9 @@
 """Modrinth and CurseForge integration for the Fionix marketplace.
 
 The module is UI-agnostic: workers call it from a QThread and the market page
-renders the resulting dataclasses.  Modrinth needs no key; CurseForge requires
-an API key configured in Settings.
+renders the resulting dataclasses. CurseForge is routed through the Fionix
+Cloudflare Worker, which injects its server-side API key; the launcher never
+sends ``x-api-key`` itself.
 """
 
 from __future__ import annotations
@@ -10,7 +11,10 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
+import os
 import re
+import socket
+import sys
 import threading
 import time
 from dataclasses import dataclass, field
@@ -18,17 +22,106 @@ from pathlib import Path
 from typing import Any, Callable, Mapping
 
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util import connection as urllib3_connection
+from urllib3.util.retry import Retry
 
+from src.core.async_download import DownloadCancelled, DownloadItem, download_many_sync
+
+try:
+    # curl_cffi impersonates Chrome's TLS/HTTP2 fingerprint, which is required
+    # for the Cloudflare Worker from some Windows/Python environments.
+    for _base in (
+        Path(getattr(sys, "_MEIPASS", "") or ""),
+        Path(__file__).resolve().parents[2],
+        Path(__file__).resolve().parents[2] / ".deps",
+    ):
+        _libs = _base / "curl_cffi.libs"
+        if _libs.is_dir():
+            try:
+                os.add_dll_directory(str(_libs))
+            except OSError:
+                pass
+    from curl_cffi import requests as curl_requests
+except Exception:  # optional fallback
+    curl_requests = None
 from src.core.exporter import record_installed_mod
-from src.core.launcher import Instance, LauncherError
+from src.core.launcher import Instance, InstallCancelled, LauncherError
+
+from config import CURSEFORGE_API_KEY
 
 logger = logging.getLogger(__name__)
 
+
+def _curseforge_endpoint() -> str:
+    """Адрес прокси-воркера CurseForge из ``config.py``.
+
+    В публичном репозитории значение пустое: каждый разворачивает свой
+    воркер (см. INSTRUCTIONS.md). Без него вкладка CurseForge отключена,
+    а Modrinth продолжает работать.
+    """
+    raw = str(CURSEFORGE_API_KEY or "").strip().rstrip("/")
+    if not raw:
+        return ""
+    if not raw.startswith(("http://", "https://")):
+        raw = "https://" + raw
+    if not raw.endswith("/v1"):
+        raw += "/v1"
+    return raw
+
 MODRINTH_API = "https://api.modrinth.com/v2"
-CURSEFORGE_API = "https://api.curseforge.com/v1"
-HTTP_HEADERS = {"User-Agent": "Fionix/1.0 (Minecraft launcher)"}
+CURSEFORGE_API = _curseforge_endpoint()
+HTTP_HEADERS = {
+    "User-Agent": (
+        "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+        "AppleWebKit/537.36 (KHTML, like Gecko) "
+        "Chrome/120.0.0.0 Safari/537.36"
+    )
+}
 
 Progress = Callable[[int, str, str], None]
+
+
+class _IPv4HTTPAdapter(HTTPAdapter):
+    """HTTPAdapter that applies IPv4/keepalive socket options."""
+
+    def init_poolmanager(self, connections, maxsize, block=False, **pool_kwargs):
+        super().init_poolmanager(
+            connections,
+            maxsize,
+            block=block,
+            socket_options=[
+                (socket.IPPROTO_TCP, socket.TCP_NODELAY, 1),
+                (socket.SOL_SOCKET, socket.SO_KEEPALIVE, 1),
+            ],
+            **pool_kwargs,
+        )
+
+
+def create_resilient_session() -> requests.Session:
+    """Build a retrying IPv4-only session for CurseForge requests."""
+    urllib3_connection.allowed_gai_family = lambda: socket.AF_INET
+    retry = Retry(
+        total=3,
+        connect=3,
+        read=3,
+        backoff_factor=1,
+        status_forcelist=[429, 500, 502, 503, 504],
+        allowed_methods=["GET", "POST"],
+        respect_retry_after_header=True,
+        raise_on_status=False,
+    )
+    adapter = _IPv4HTTPAdapter(
+        pool_connections=10,
+        pool_maxsize=10,
+        max_retries=retry,
+    )
+    session = requests.Session()
+    session.trust_env = False
+    session.headers.update(HTTP_HEADERS)
+    session.mount("http://", adapter)
+    session.mount("https://", adapter)
+    return session
 
 
 class MarketError(LauncherError):
@@ -72,6 +165,7 @@ class MarketVersion:
     filename: str
     url: str
     sha512: str = ""
+    sha1: str = ""
     game_versions: tuple[str, ...] = ()
     loaders: tuple[str, ...] = ()
     dependencies: tuple[MarketDependency, ...] = ()
@@ -108,15 +202,17 @@ class MarketAPI:
     def __init__(self, config) -> None:
         self.config = config
         self._project_cache: dict[str, MarketProject] = {}
-
-    @property
-    def curseforge_key(self) -> str:
-        value = str(self.config.get("curseforge_key", "") or "").strip()
-        if value:
-            return value
-        from config import CURSEFORGE_API_KEY
-
-        return str(CURSEFORGE_API_KEY or "").strip()
+        self.session = create_resilient_session()
+        self.cf_session = None
+        if curl_requests is not None:
+            try:
+                self.cf_session = curl_requests.Session(
+                    impersonate="chrome120"
+                )
+            except Exception:
+                logger.warning(
+                    "curl_cffi session could not be created", exc_info=True
+                )
 
     @property
     def proxies(self) -> dict[str, str] | None:
@@ -137,23 +233,180 @@ class MarketAPI:
         url = f"http://{auth}{host}:{port}"
         return {"http": url, "https": url}
 
+    @staticmethod
+    def _cf(path: str) -> str:
+        """Полный URL прокси-воркера CurseForge; без него — понятная ошибка."""
+        if not CURSEFORGE_API:
+            raise MarketKeyMissing(
+                "CurseForge не настроен: укажите адрес воркера "
+                "(CURSEFORGE_API_KEY) в config.py."
+            )
+        return f"{CURSEFORGE_API}{path}"
+
+    def _cf_debug(self, message: str) -> None:
+        """Append network diagnostics to ``%APPDATA%/Fionix/cf_debug.log``."""
+        try:
+            data_dir = Path(getattr(self.config, "data_dir", "") or ".")
+            path = data_dir / "cf_debug.log"
+            path.parent.mkdir(parents=True, exist_ok=True)
+            with path.open("a", encoding="utf-8") as handle:
+                handle.write(
+                    f"{time.strftime('%Y-%m-%d %H:%M:%S')} | {message}\n"
+                )
+        except OSError:
+            logger.debug("Could not write cf_debug.log", exc_info=True)
+
+    def _cf_get(self, url, *, params, headers, timeout):
+        """Cloudflare-compatible request via Chrome TLS impersonation."""
+        last_error: Exception | None = None
+        retry_statuses = {429, 500, 502, 503, 504}
+        for attempt in range(1, 5):
+            try:
+                response = self.cf_session.get(
+                    url,
+                    params=params,
+                    headers=headers,
+                    proxies=self.proxies,
+                    timeout=timeout,
+                )
+                if response.status_code not in retry_statuses or attempt == 4:
+                    return response
+                self._cf_debug(
+                    f"RETRY STATUS {response.status_code} attempt {attempt}"
+                )
+            except Exception as exc:
+                last_error = exc
+                self._cf_debug(
+                    f"CF GET ERROR {type(exc).__name__} attempt {attempt}: {exc}"
+                )
+                if self.proxies:
+                    try:
+                        response = self.cf_session.get(
+                            url,
+                            params=params,
+                            headers=headers,
+                            proxies={},
+                            timeout=timeout,
+                        )
+                        if response.status_code not in retry_statuses or attempt == 4:
+                            return response
+                    except Exception as direct_exc:
+                        last_error = direct_exc
+                        self._cf_debug(
+                            f"CF DIRECT ERROR {type(direct_exc).__name__}: "
+                            f"{direct_exc}"
+                        )
+            if attempt < 4:
+                time.sleep(backoff := (1, 2, 4)[attempt - 1])
+                self._cf_debug(f"RETRY attempt {attempt + 1} after {backoff}s")
+        if last_error is not None:
+            raise last_error
+        raise MarketError("CurseForge не ответил после 4 попыток.")
+
     def _json(self, url: str, *, params: Mapping[str, Any] | None = None,
-              headers: Mapping[str, str] | None = None, timeout=(10, 30)) -> Any:
+              headers: Mapping[str, str] | None = None, timeout=(10, 60)) -> Any:
         merged = dict(HTTP_HEADERS)
         if headers:
             merged.update(headers)
+        is_curseforge = bool(CURSEFORGE_API) and str(url).startswith(CURSEFORGE_API)
+        prepared_url = requests.Request(
+            "GET", url, params=params, headers=merged
+        ).prepare().url
+        if is_curseforge:
+            print(f"[CurseForge] GET {prepared_url}", flush=True)
+            self._cf_debug(f"GET {prepared_url}")
+
         try:
-            response = requests.get(
-                url,
-                params=params,
-                headers=merged,
-                proxies=self.proxies,
-                timeout=timeout,
+            if is_curseforge and self.cf_session is not None:
+                response = self._cf_get(
+                    url,
+                    params=params,
+                    headers=merged,
+                    timeout=timeout,
+                )
+            else:
+                response = self.session.get(
+                    url,
+                    params=params,
+                    headers=merged,
+                    proxies=self.proxies,
+                    timeout=timeout,
+                )
+        except requests.exceptions.Timeout as exc:
+            if is_curseforge:
+                self._cf_debug(
+                    f"TIMEOUT {type(exc).__name__} {prepared_url}: {exc}"
+                )
+                print(
+                    "Сработал таймаут, попытка повторится",
+                    flush=True,
+                )
+            logger.warning(
+                "Сработал таймаут, попытка повторится: %s", exc
             )
-        except requests.RequestException as exc:
-            raise MarketError("Нет связи с интернетом или сервер недоступен.") from exc
-        if response.status_code == 403 and "curseforge" in url:
-            raise MarketError("CurseForge отклонил API-ключ (403).")
+            raise
+        except requests.exceptions.RequestException as exc:
+            if is_curseforge:
+                self._cf_debug(
+                    f"ERROR {type(exc).__name__} {prepared_url}: {exc}"
+                )
+                print(f"[CurseForge] ERROR {prepared_url}: {exc}", flush=True)
+                logger.warning("CurseForge connection failed: %s", exc)
+                # A configured global proxy may be dead; the Worker itself is
+                # reachable directly, so retry the request without it.
+                if self.proxies:
+                    try:
+                        response = self.session.get(
+                            url,
+                            params=params,
+                            headers=merged,
+                            proxies={},
+                            timeout=timeout,
+                        )
+                    except requests.exceptions.Timeout:
+                        self._cf_debug(
+                            f"RETRY TIMEOUT {prepared_url}"
+                        )
+                        raise
+                    except requests.exceptions.RequestException as retry_exc:
+                        self._cf_debug(
+                            f"RETRY ERROR {type(retry_exc).__name__} "
+                            f"{prepared_url}: {retry_exc}"
+                        )
+                        raise MarketError(
+                            f"Нет связи с CurseForge: {retry_exc}"
+                        ) from retry_exc
+                else:
+                    raise MarketError(
+                        f"Нет связи с CurseForge: {exc}"
+                    ) from exc
+            else:
+                raise MarketError(
+                    "Нет связи с интернетом или сервер недоступен."
+                ) from exc
+        except Exception as exc:
+            if is_curseforge:
+                self._cf_debug(
+                    f"CF ERROR {type(exc).__name__} {prepared_url}: {exc}"
+                )
+                if "Timeout" in type(exc).__name__:
+                    logger.warning("Сработал таймаут, попытка повторится")
+                raise MarketError(
+                    f"Нет связи с CurseForge: {exc}"
+                ) from exc
+            raise
+
+        if is_curseforge:
+            body = response.text[:800].replace("\n", " ")
+            self._cf_debug(
+                f"STATUS {response.status_code} {prepared_url} BODY {body}"
+            )
+            print(
+                f"[CurseForge] {response.status_code} {prepared_url}",
+                flush=True,
+            )
+        if response.status_code == 403 and is_curseforge:
+            raise MarketError("Cloudflare Worker отклонил запрос (403).")
         if response.status_code >= 400:
             raise MarketError(f"Сервер вернул ошибку {response.status_code}.")
         try:
@@ -329,14 +582,74 @@ class MarketAPI:
             )
         return versions
 
+    def curseforge_project(self, project_id: str) -> MarketProject:
+        """Load full CurseForge project details (HTML body and screenshots)."""
+        payload = self._json(self._cf(f"/mods/{int(project_id)}"))
+        data = payload.get("data") if isinstance(payload, Mapping) else None
+        if not isinstance(data, Mapping):
+            raise MarketError("Проект CurseForge не найден.")
+        screenshots = [
+            item
+            for item in (data.get("screenshots") or ())
+            if isinstance(item, Mapping)
+        ]
+        authors = data.get("authors") or []
+        author = (
+            str(authors[0].get("name"))
+            if authors and isinstance(authors[0], Mapping)
+            else "CurseForge"
+        )
+        latest = data.get("latestFiles") or []
+        versions: list[str] = []
+        loaders: list[str] = []
+        for item in latest:
+            if not isinstance(item, Mapping):
+                continue
+            for value in item.get("gameVersions") or ():
+                if not isinstance(value, str):
+                    continue
+                if value.lower() in {"forge", "fabric", "quilt", "neoforge"}:
+                    if value not in loaders:
+                        loaders.append(value)
+                elif not value.startswith(("Client", "Server")):
+                    if value not in versions:
+                        versions.append(value)
+        body = str(data.get("description") or "")
+        if not body:
+            try:
+                description_payload = self._json(
+                    self._cf(f"/mods/{int(project_id)}/description")
+                )
+                body = str(
+                    description_payload.get("data") or ""
+                    if isinstance(description_payload, Mapping)
+                    else ""
+                )
+            except MarketError:
+                body = ""
+        raw = dict(data)
+        raw["screenshots"] = screenshots
+        raw["gallery"] = screenshots
+        return MarketProject(
+            id=str(data.get("id") or project_id),
+            slug=str(data.get("slug") or ""),
+            name=str(data.get("name") or "Без названия"),
+            author=author,
+            description=str(data.get("summary") or ""),
+            icon_url=str((data.get("logo") or {}).get("thumbnailUrl") or "")
+            if isinstance(data.get("logo"), Mapping)
+            else "",
+            downloads=int(data.get("downloadCount") or 0),
+            source="curseforge",
+            body=body,
+            game_versions=tuple(versions),
+            loaders=tuple(loaders),
+            raw=raw,
+        )
+
     def curseforge_latest_file(self, project_id: int) -> Mapping[str, Any] | None:
-        if not self.curseforge_key:
-            return None
         try:
-            payload = self._json(
-                f"{CURSEFORGE_API}/v1/mods/{project_id}",
-                headers={"x-api-key": self.curseforge_key},
-            )
+            payload = self._json(self._cf(f"/mods/{project_id}"))
         except MarketError:
             return None
         data = payload.get("data") if isinstance(payload, Mapping) else None
@@ -346,24 +659,96 @@ class MarketAPI:
         return files[0] if files and isinstance(files[0], Mapping) else None
 
     def curseforge_file(self, project_id: int, file_id: int) -> Mapping[str, Any] | None:
-        if not self.curseforge_key:
-            return None
         try:
             payload = self._json(
-                f"{CURSEFORGE_API}/v1/mods/{project_id}/files/{file_id}",
-                headers={"x-api-key": self.curseforge_key},
+                self._cf(f"/mods/{project_id}/files/{file_id}")
             )
         except MarketError:
             return None
         data = payload.get("data") if isinstance(payload, Mapping) else None
         return data if isinstance(data, Mapping) else None
 
+    def curseforge_versions(self, project_id: str) -> list[MarketVersion]:
+        """Return CurseForge file versions without requiring a client API key."""
+        try:
+            payload = self._json(
+                self._cf(f"/mods/{int(project_id)}/files"),
+                params={"pageSize": 50},
+            )
+        except (MarketError, TypeError, ValueError):
+            return []
+        rows = payload.get("data", []) if isinstance(payload, Mapping) else []
+        versions: list[MarketVersion] = []
+        for row in rows:
+            if not isinstance(row, Mapping):
+                continue
+            hashes = row.get("hashes") or []
+            sha1 = ""
+            if isinstance(hashes, list):
+                sha1 = next(
+                    (
+                        str(item.get("value") or "")
+                        for item in hashes
+                        if isinstance(item, Mapping) and int(item.get("algo") or 0) == 1
+                    ),
+                    "",
+                )
+            game_versions = tuple(
+                str(item)
+                for item in (row.get("gameVersions") or ())
+                if isinstance(item, str) and not item.startswith(("Client", "Server"))
+            )
+            dependencies = tuple(
+                MarketDependency(
+                    project_id=str(item.get("modId") or ""),
+                    dependency_type=(
+                        "required"
+                        if int(item.get("relationType") or 0) == 3
+                        else "optional"
+                    ),
+                )
+                for item in (row.get("dependencies") or ())
+                if isinstance(item, Mapping) and item.get("modId")
+            )
+            release_type = {1: "release", 2: "beta", 3: "alpha"}.get(
+                int(row.get("releaseType") or 0), "release"
+            )
+            versions.append(
+                MarketVersion(
+                    id=str(row.get("id") or ""),
+                    project_id=str(project_id),
+                    name=str(row.get("displayName") or ""),
+                    version_number=str(row.get("displayName") or row.get("id") or ""),
+                    filename=_safe_filename(
+                        str(row.get("fileName") or f"curseforge-{project_id}.jar")
+                    ),
+                    url=str(row.get("downloadUrl") or ""),
+                    sha1=sha1,
+                    game_versions=game_versions,
+                    loaders=tuple(
+                        item
+                        for item in game_versions
+                        if item.lower() in {"forge", "fabric", "quilt", "neoforge"}
+                    ),
+                    dependencies=dependencies,
+                    version_type=release_type,
+                    published=str(row.get("fileDate") or ""),
+                )
+            )
+        return versions
+
     def curseforge_modpack_file(self, project: MarketProject) -> Mapping[str, Any] | None:
         files = project.raw.get("latestFiles") or []
-        return next(
+        latest = next(
             (item for item in files if isinstance(item, Mapping) and item.get("downloadUrl")),
             None,
         )
+        if latest is not None:
+            return latest
+        try:
+            return self.curseforge_latest_file(int(project.id))
+        except (MarketError, TypeError, ValueError):
+            return None
 
     def modrinth_project(self, project_id: str) -> MarketProject:
         if project_id in self._project_cache:
@@ -468,56 +853,53 @@ class MarketAPI:
         filename: str,
         *,
         sha512: str = "",
+        sha1: str = "",
         progress: Progress | None = None,
         cancel_event: threading.Event | None = None,
     ) -> Path:
         mods_dir.mkdir(parents=True, exist_ok=True)
         target = mods_dir / _safe_filename(filename)
-        if target.is_file():
-            return target
         disabled = target.with_name(target.name + ".disabled")
-        if disabled.is_file():
+        if disabled.is_file() and not target.exists():
             disabled.rename(target)
-            return target
-        temp = target.with_name(target.name + ".part")
-        digest = hashlib.sha512()
-        downloaded = 0
-        started = time.monotonic()
         try:
-            with requests.get(
-                url,
-                headers=HTTP_HEADERS,
-                proxies=self.proxies,
-                stream=True,
-                timeout=(15, 120),
-            ) as response:
-                response.raise_for_status()
-                total = int(response.headers.get("Content-Length") or 0)
-                with temp.open("wb") as handle:
-                    for chunk in response.iter_content(chunk_size=256 * 1024):
-                        _check_cancel(cancel_event)
-                        if not chunk:
-                            continue
-                        handle.write(chunk)
-                        digest.update(chunk)
-                        downloaded += len(chunk)
-                        if progress and total:
-                            percent = min(95, int(downloaded * 85 / total) + 5)
-                            progress(
-                                percent,
-                                f"Загрузка {target.name}",
-                                f"{downloaded / 1024 / 1024:.1f} МБ · "
-                                f"{downloaded / 1024 / 1024 / max(0.25, time.monotonic() - started):.1f} МБ/с",
-                            )
-            _check_cancel(cancel_event)
-            if sha512 and digest.hexdigest().lower() != sha512.lower():
-                raise MarketError("Контрольная сумма файла не совпала.")
-            temp.replace(target)
-            return target
-        except requests.RequestException as exc:
+            return download_many_sync(
+                [
+                    DownloadItem(
+                        url=url,
+                        destination=target,
+                        sha512=sha512,
+                        sha1=sha1,
+                    )
+                ],
+                progress=progress,
+                cancel_event=cancel_event,
+                proxy=(self.proxies or {}).get("https"),
+            )[0]
+        except DownloadCancelled as exc:
+            raise InstallCancelled("Загрузка отменена.") from exc
+        except Exception as exc:
             raise MarketError(f"Не удалось скачать файл: {exc}") from exc
-        finally:
-            temp.unlink(missing_ok=True)
+
+    def download_files(
+        self,
+        items: list[DownloadItem],
+        *,
+        progress: Progress | None = None,
+        cancel_event: threading.Event | None = None,
+    ) -> list[Path]:
+        try:
+            return download_many_sync(
+                items,
+                progress=progress,
+                cancel_event=cancel_event,
+                proxy=(self.proxies or {}).get("https"),
+                limit=12,
+            )
+        except DownloadCancelled as exc:
+            raise InstallCancelled("Загрузка отменена.") from exc
+        except Exception as exc:
+            raise MarketError(f"Не удалось скачать файлы: {exc}") from exc
 
     def install_modrinth_content(
         self,
@@ -712,9 +1094,6 @@ class MarketAPI:
         limit: int = 20,
         class_id: int = 6,
     ) -> list[MarketProject]:
-        key = self.curseforge_key
-        if not key:
-            raise MarketKeyMissing("CurseForge временно недоступен.")
         loader_id = {"forge": 1, "fabric": 4, "quilt": 5, "neoforge": 6}.get(loader)
         params: dict[str, Any] = {
             "gameId": 432,
@@ -728,11 +1107,7 @@ class MarketAPI:
         }
         if loader_id:
             params["modLoaderType"] = loader_id
-        payload = self._json(
-            f"{CURSEFORGE_API}/mods/search",
-            params=params,
-            headers={"x-api-key": key},
-        )
+        payload = self._json(self._cf("/mods/search"), params=params)
         rows = payload.get("data", []) if isinstance(payload, Mapping) else []
         projects: list[MarketProject] = []
         for row in rows:
@@ -771,14 +1146,25 @@ class MarketAPI:
                 chosen = item
                 break
         if chosen is None:
+            try:
+                chosen = self.curseforge_latest_file(int(project.id))
+            except (MarketError, TypeError, ValueError):
+                chosen = None
+        if chosen is None:
             raise MarketError(
                 "CurseForge не выдал прямую ссылку на файл. "
                 "Скачайте мод на сайте CurseForge."
             )
+        sha1 = ""
+        for item in chosen.get("hashes") or ():
+            if isinstance(item, Mapping) and int(item.get("algo") or 0) == 1:
+                sha1 = str(item.get("value") or "")
+                break
         path = self.download_file(
             str(chosen["downloadUrl"]),
             instance.path / "mods",
             str(chosen.get("fileName") or f"{project.slug}.jar"),
+            sha1=sha1,
             progress=progress,
             cancel_event=cancel_event,
         )

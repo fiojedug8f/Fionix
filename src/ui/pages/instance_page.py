@@ -25,6 +25,7 @@ from src.core.launcher import (
     format_playtime,
 )
 from src.ui.pages import Page
+from src.ui.screenshot_gallery import ScreenshotGallery
 from src.ui.widgets import CapsLabel, IconBadge, IconButton, PrimaryButton
 
 
@@ -289,6 +290,9 @@ class InstancePage(Page):
             content_row.addWidget(tile)
         self.body.addLayout(content_row)
 
+        self.screenshots = ScreenshotGallery()
+        self.body.addWidget(self.screenshots)
+
         maintenance = QHBoxLayout()
         maintenance.setContentsMargins(0, 0, 0, 0)
         maintenance.setSpacing(10)
@@ -406,6 +410,7 @@ class InstancePage(Page):
         self.path_label.setText(short_path)
         self.path_label.setToolTip(str(instance.path))
         self.set_content_counts(content_counts or {})
+        self.screenshots.load(instance.path, instance.name)
         if instance.modpack_name:
             self.modpack_title.setText(instance.modpack_name)
             author = instance.modpack_author or "неизвестный автор"
@@ -502,6 +507,9 @@ class InstancePage(Page):
         self._instance = instance
         self.playtime_value.setText(format_playtime(instance.playtime_seconds))
         self.last_played_chip.set_value(format_last_played(instance.last_played_at))
+        # Minecraft writes F2 screenshots into <instance>/screenshots while the
+        # game runs; pick them up together with the overlay shots.
+        self.screenshots.load(instance.path, instance.name)
         self.timer_label.hide()
         self.play_button.setEnabled(True)
         self.play_button.setText("Играть")
@@ -539,6 +547,10 @@ class InstancePage(Page):
 
     def current_instance(self) -> Instance | None:
         return self._instance
+
+    def refresh_screenshots(self) -> None:
+        """Pick up screenshots taken from the in-game overlay."""
+        self.screenshots.refresh()
 
     # -------------------------------------------------------------- helpers
     def _set_maintenance_enabled(self, enabled: bool) -> None:

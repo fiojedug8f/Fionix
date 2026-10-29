@@ -84,9 +84,9 @@ class TitleBar(QWidget):
         layout.addWidget(separator, 0, Qt.AlignmentFlag.AlignVCenter)
         layout.addSpacing(8)
 
-        self.minimize_button = WindowButton("minimize", "РЎРІРµСЂРЅСѓС‚СЊ")
-        self.maximize_button = WindowButton("maximize", "Р Р°Р·РІРµСЂРЅСѓС‚СЊ")
-        self.close_button = WindowButton("close", "Р—Р°РєСЂС‹С‚СЊ", danger=True)
+        self.minimize_button = WindowButton("minimize", "Свернуть")
+        self.maximize_button = WindowButton("maximize", "Развернуть")
+        self.close_button = WindowButton("close", "Закрыть", danger=True)
         self.minimize_button.clicked.connect(self.minimize_requested.emit)
         self.maximize_button.clicked.connect(self.maximize_requested.emit)
         self.close_button.clicked.connect(self.close_requested.emit)
@@ -114,7 +114,7 @@ class TitleBar(QWidget):
 
     def set_maximized(self, maximized: bool) -> None:
         self.maximize_button.set_icon_name("restore" if maximized else "maximize")
-        self.maximize_button.setToolTip("Р’РѕСЃСЃС‚Р°РЅРѕРІРёС‚СЊ" if maximized else "Р Р°Р·РІРµСЂРЅСѓС‚СЊ")
+        self.maximize_button.setToolTip("Восстановить" if maximized else "Развернуть")
         self.maximize_button.setAccessibleName(self.maximize_button.toolTip())
 
     # --------------------------------------------------------------- events

@@ -43,6 +43,7 @@ class SettingsPage(Page):
     accent_changed = Signal(str)
     background_changed = Signal()
     video_volume_changed = Signal(int)
+    overlay_changed = Signal(bool)
     language_changed = Signal(str)
     accounts_add_requested = Signal()
     account_switch_requested = Signal(str)
@@ -342,6 +343,26 @@ class SettingsPage(Page):
         self.video_volume_label.setFixedWidth(38)
         volume_row.addWidget(self.video_volume_label)
         layout.addLayout(volume_row)
+
+        overlay_row = QHBoxLayout()
+        overlay_row.setContentsMargins(0, 12, 0, 0)
+        overlay_row.setSpacing(10)
+        overlay_row.addLayout(
+            self._field_text(
+                "Включить оверлей",
+                "Shift+F1 · браузер, плеер и таймер поверх Minecraft. "
+                "Панели появляются сами при запуске игры.",
+            ),
+            1,
+        )
+        self.overlay_toggle = ToggleSwitch()
+        self.overlay_toggle.setAccessibleName("Включить оверлей")
+        self.overlay_toggle.setChecked(self._config.overlay_enabled)
+        self.overlay_toggle.toggled.connect(self._on_overlay_toggled)
+        overlay_row.addWidget(
+            self.overlay_toggle, 0, Qt.AlignmentFlag.AlignVCenter
+        )
+        layout.addLayout(overlay_row)
         self.background_status = QLabel(self._background_label())
         self.background_status.setObjectName("Caption")
         layout.addSpacing(5)
@@ -961,6 +982,10 @@ class SettingsPage(Page):
         self.video_volume_label.setText(f"{value}%")
         self._config.update({"video_volume": int(value)})
         self.video_volume_changed.emit(int(value))
+
+    def _on_overlay_toggled(self, enabled: bool) -> None:
+        self._config.update({"overlay_enabled": bool(enabled)})
+        self.overlay_changed.emit(bool(enabled))
 
     def _on_theme_changed(self) -> None:
         theme_key = self.theme_combo.currentData()

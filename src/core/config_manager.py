@@ -51,6 +51,8 @@ def _defaults() -> dict[str, Any]:
         "show_snapshots": True,
         "language": "ru",
         "video_volume": 35,
+        "overlay_enabled": False,
+        "overlay_positions": {},
         "memory_mb": DEFAULT_MEMORY_MB,
         "instances_path": "",
         "last_page": "home",
@@ -112,7 +114,10 @@ def _merge(defaults: dict[str, Any], overrides: Mapping[str, Any]) -> dict[str, 
         if key not in result:
             continue
         if isinstance(result[key], dict) and isinstance(value, Mapping):
-            result[key] = _merge(result[key], value)
+            if not result[key]:
+                result[key] = copy.deepcopy(dict(value))
+            else:
+                result[key] = _merge(result[key], value)
         else:
             result[key] = value
     return result
@@ -168,6 +173,12 @@ def _sanitize(raw: Mapping[str, Any] | None) -> dict[str, Any]:
         "show_snapshots": _as_bool(data.get("show_snapshots"), True),
         "language": "en" if str(data.get("language") or "") == "en" else "ru",
         "video_volume": _as_int(data.get("video_volume"), 35, 0, 100),
+        "overlay_enabled": _as_bool(data.get("overlay_enabled"), False),
+        "overlay_positions": (
+            data.get("overlay_positions")
+            if isinstance(data.get("overlay_positions"), dict)
+            else {}
+        ),
         "memory_mb": _as_int(
             data.get("memory_mb"), DEFAULT_MEMORY_MB, MIN_MEMORY_MB, MAX_MEMORY_MB
         ),
@@ -411,6 +422,19 @@ class ConfigManager:
     @property
     def video_volume(self) -> int:
         return max(0, min(100, int(self._data.get("video_volume", 35))))
+
+    @property
+    def overlay_enabled(self) -> bool:
+        return bool(self._data.get("overlay_enabled", False))
+
+    @property
+    def overlay_positions(self) -> dict:
+        value = self._data.get("overlay_positions", {})
+        return dict(value) if isinstance(value, dict) else {}
+
+    def set_overlay_positions(self, positions: dict) -> None:
+        self._data["overlay_positions"] = dict(positions)
+        self.save()
 
     @property
     def language(self) -> str:

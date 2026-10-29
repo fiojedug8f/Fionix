@@ -6,7 +6,7 @@ import base64
 import json
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QRectF, Qt, QUrl, Signal
+from PySide6.QtCore import QByteArray, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import QColor, QFont, QFontMetrics, QPainter, QPixmap
 from PySide6.QtNetwork import QNetworkAccessManager, QNetworkReply, QNetworkRequest
 from PySide6.QtWidgets import (
@@ -14,6 +14,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QScrollArea,
     QSizePolicy,
     QVBoxLayout,
@@ -43,17 +44,29 @@ class SidebarInstanceButton(HoverButton):
     def __init__(self, instance: Instance, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.instance = instance
+        self._active = False
         self.setFixedHeight(45)
         self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Fixed)
         self.setToolTip(f"{instance.name}\n{instance.path}")
         self.setAccessibleName(f"Открыть {instance.name}")
+
+    def set_active(self, active: bool) -> None:
+        if self._active != active:
+            self._active = active
+            self.update()
 
     def paintEvent(self, event) -> None:  # noqa: N802 - Qt API
         theme = current_theme()
         painter = QPainter(self)
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         rect = QRectF(self.rect()).adjusted(0, 1, 0, -1)
-        if self._hover > 0.01:
+        if self._active:
+            painter.setPen(Qt.PenStyle.NoPen)
+            painter.setBrush(QColor(0, 120, 212, 48))
+            painter.drawRoundedRect(rect, 10, 10)
+            painter.setBrush(theme.accent)
+            painter.drawRoundedRect(QRectF(0, 8, 3, rect.height() - 16), 1.5, 1.5)
+        elif self._hover > 0.01:
             painter.setPen(Qt.PenStyle.NoPen)
             painter.setBrush(QColor(255, 255, 255, int(22 * self._hover)))
             painter.drawRoundedRect(rect, 10, 10)
@@ -86,7 +99,11 @@ class SidebarInstanceButton(HoverButton):
             self.instance.name, Qt.TextElideMode.ElideRight, int(text_rect.width())
         )
         painter.setFont(font(11, QFont.Weight.DemiBold))
-        painter.setPen(theme.text_secondary if self._hover > 0.4 else theme.text_muted)
+        painter.setPen(
+            theme.text
+            if self._active
+            else (theme.text_secondary if self._hover > 0.4 else theme.text_muted)
+        )
         painter.drawText(
             text_rect,
             int(Qt.AlignmentFlag.AlignVCenter | Qt.AlignmentFlag.AlignLeft),
@@ -111,8 +128,9 @@ class Sidebar(QFrame):
     account_selected = Signal(str)
     profile_requested = Signal()
     account_add_requested = Signal()
+    token_refresh_requested = Signal(str)
 
-    def __init__(self, parent: QWidget | None = None, *, version: str = "1.5.0") -> None:
+    def __init__(self, parent: QWidget | None = None, *, version: str = "2.0.0") -> None:
         super().__init__(parent)
         self.setObjectName("Sidebar")
         self.setFixedWidth(266)
@@ -121,6 +139,8 @@ class Sidebar(QFrame):
         self._active_account: Account | None = None
         self._skin_manager = QNetworkAccessManager(self)
         self._pending_skin_id = ""
+        self._instance_buttons: list[SidebarInstanceButton] = []
+        self._active_instance_id = ""
 
         self._nav_buttons: dict[str, NavButton] = {}
         self._button_group = QButtonGroup(self)
@@ -226,7 +246,7 @@ class Sidebar(QFrame):
     def _build_profile(self) -> QFrame:
         profile = QFrame()
         profile.setObjectName("ProfileCard")
-        profile.setFixedHeight(106)
+        profile.setFixedHeight(150)
         profile.setToolTip("Аккаунт и быстрый переход между профилями")
 
         layout = QVBoxLayout(profile)
@@ -268,12 +288,61 @@ class Sidebar(QFrame):
         self.account_combo.setMinimumHeight(28)
         self.account_combo.activated.connect(self._on_account_activated)
         layout.addWidget(self.account_combo)
+
+        self.token_button = QPushButton("✓ Токен активен")
+        self.token_button.setObjectName("TokenButton")
+        self.token_button.setCursor(Qt.CursorShape.PointingHandCursor)
+        self.token_button.setFixedHeight(28)
+        self.token_button.setToolTip("Проверить и обновить токен аккаунта")
+        self.token_button.clicked.connect(self._request_token_refresh)
+        layout.addWidget(self.token_button)
+
+        self._token_timer = QTimer(self)
+        self._token_timer.setInterval(60_000)
+        self._token_timer.timeout.connect(self._update_token_button)
+        self._token_timer.start()
         return profile
 
     def _on_account_activated(self, index: int) -> None:
         account_id = self.account_combo.itemData(index)
         if isinstance(account_id, str) and account_id:
             self.account_selected.emit(account_id)
+
+    def _request_token_refresh(self) -> None:
+        if self._active_account is not None:
+            self.token_refresh_requested.emit(self._active_account.id)
+
+    def _update_token_button(self) -> None:
+        account = self._active_account
+        if (
+            account is None
+            or account.is_guest
+            or account.provider != "microsoft"
+            or not account.access_token
+        ):
+            self.token_button.hide()
+            return
+        self.token_button.show()
+        expired = account.token_expired
+        if expired:
+            text = "✕ Токен истёк · обновить"
+            state = "expired"
+        else:
+            text = f"✓ Токен · {account.token_remaining_text()}"
+            state = "valid"
+        self.token_button.setText(text)
+        self.token_button.setProperty("state", state)
+        self.token_button.style().unpolish(self.token_button)
+        self.token_button.style().polish(self.token_button)
+        if account.expires_at:
+            self.token_button.setToolTip(
+                f"Истекает: {account.expires_at.replace('T', ' ')[:16]}\n"
+                "Нажмите, чтобы обновить токен."
+            )
+        else:
+            self.token_button.setToolTip(
+                "Срок действия не указан. Нажмите, чтобы обновить токен."
+            )
 
     def set_accounts(self, accounts: list[Account], active_id: str = "") -> None:
         self._accounts = list(accounts)
@@ -301,9 +370,11 @@ class Sidebar(QFrame):
             self.profile_name.setText("Гость")
             self.profile_role.setText("Локальный профиль")
             self.avatar.set_image(None)
+            self.token_button.hide()
             return
         self.profile_name.setText(active.username)
         self.profile_role.setText(active.provider_label)
+        self._update_token_button()
         self._load_skin(active)
 
     # ----------------------------------------------------------------- skin
@@ -405,11 +476,14 @@ class Sidebar(QFrame):
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
+        self._instance_buttons = []
         for instance in instances:
             button = SidebarInstanceButton(instance)
+            button.set_active(instance.folder_name == self._active_instance_id)
             button.clicked.connect(
                 lambda _checked=False, item=instance: self.instance_selected.emit(item)
             )
+            self._instance_buttons.append(button)
             self.instances_list_layout.insertWidget(
                 self.instances_list_layout.count() - 1, button
             )
@@ -421,11 +495,27 @@ class Sidebar(QFrame):
             self.instances_empty.show()
 
     def set_active(self, key: str) -> None:
+        self._active_instance_id = ""
+        for instance_button in self._instance_buttons:
+            instance_button.set_active(False)
         button = self._nav_buttons.get(key)
         if button is not None and not button.isChecked():
             button.setChecked(True)
 
+    def set_active_instance(self, instance_id: str) -> None:
+        self._active_instance_id = instance_id or ""
+        self._button_group.setExclusive(False)
+        for button in self._nav_buttons.values():
+            button.setChecked(False)
+        self._button_group.setExclusive(True)
+        for button in self._instance_buttons:
+            button.set_active(
+                button.instance.folder_name == self._active_instance_id
+            )
+
     def current_page(self) -> str:
+        if self._active_instance_id:
+            return "instance"
         for key, button in self._nav_buttons.items():
             if button.isChecked():
                 return key

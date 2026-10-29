@@ -1,0 +1,27 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.env
+config.local.py
+*.secret
+
+# Local scratch / test artefacts
+.tmp/
+tests/.tmp/
+.deps/
+.wheels/
+*.log
+
+# Build artefacts
+build/
+dist/
+build-onefile/
+release-onefile/
+*.manifest
+
+# Editors
+.vscode/
+.idea/
+*.swp

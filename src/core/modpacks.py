@@ -5,7 +5,6 @@ from __future__ import annotations
 import json
 import logging
 import shutil
-from concurrent.futures import ThreadPoolExecutor, as_completed
 import tempfile
 import threading
 import uuid
@@ -14,8 +13,7 @@ from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath
 from typing import Any, Mapping
 
-import requests
-
+from src.core.async_download import DownloadItem
 from src.core.launcher import Instance, LauncherError, LauncherService
 from src.core.market_api import MarketAPI, MarketError, MarketProject
 
@@ -259,42 +257,38 @@ def _install_modrinth_files(
     cancel_event,
 ) -> None:
     files = list(info.files_manifest)
-    total = max(1, len(files))
     if not files:
         return
-    lock = threading.Lock()
-    completed = 0
-
-    def download(item: Mapping[str, Any]) -> None:
-        nonlocal completed
+    items: list[DownloadItem] = []
+    for item in files:
         if cancel_event is not None and cancel_event.is_set():
             raise LauncherError("Установка сборки отменена.")
         path = _safe_relative(str(item.get("path") or ""))
-        destination = instance.path / path
         urls = item.get("downloads") or []
         if not urls:
-            return
+            continue
         hashes = item.get("hashes") or {}
-        api.download_file(
-            str(urls[0]),
-            destination.parent,
-            destination.name,
-            sha512=str(hashes.get("sha512") or ""),
-            cancel_event=cancel_event,
-        )
-        with lock:
-            completed += 1
-            _emit(
-                progress,
-                34 + int(completed * 56 / total),
-                f"Моды: {completed} из {total}",
-                path.name,
+        items.append(
+            DownloadItem(
+                url=str(urls[0]),
+                destination=instance.path / path,
+                sha512=str(hashes.get("sha512") or ""),
             )
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(download, item) for item in files]
-        for future in as_completed(futures):
-            future.result()
+        )
+    if items:
+        if hasattr(api, "download_files"):
+            api.download_files(items, progress=progress, cancel_event=cancel_event)
+        else:
+            for item in items:
+                api.download_file(
+                    item.url,
+                    item.destination.parent,
+                    item.destination.name,
+                    sha512=item.sha512,
+                    sha1=item.sha1,
+                    cancel_event=cancel_event,
+                )
+        _emit(progress, 96, "Моды сборки загружены", f"{len(items)} файлов")
 
 
 def _install_curseforge_files(
@@ -305,45 +299,66 @@ def _install_curseforge_files(
     cancel_event,
 ) -> None:
     files = list(info.files_manifest)
-    total = max(1, len(files))
     if not files:
         return
-    lock = threading.Lock()
-    completed = 0
-
-    def download(item: Mapping[str, Any]) -> None:
-        nonlocal completed
+    versions = {
+        version.id: version
+        for version in api.curseforge_versions(str(info.project.id))
+    }
+    items: list[DownloadItem] = []
+    for item in files:
         if cancel_event is not None and cancel_event.is_set():
             raise LauncherError("Установка сборки отменена.")
-        project_id = item.get("projectID")
-        file_id = item.get("fileID")
-        if not project_id or not file_id:
-            return
-        file_data = api.curseforge_file(int(project_id), int(file_id))
-        url = str(file_data.get("downloadUrl") or "") if file_data else ""
-        filename = str(file_data.get("fileName") or f"mod-{project_id}-{file_id}.jar") if file_data else ""
-        if not url:
-            logger.warning("CurseForge file %s/%s has no download API URL", project_id, file_id)
-            return
-        api.download_file(
-            url,
-            instance.path / "mods",
-            filename,
-            cancel_event=cancel_event,
-        )
-        with lock:
-            completed += 1
-            _emit(
-                progress,
-                34 + int(completed * 56 / total),
-                f"Моды: {completed} из {total}",
-                filename,
+        file_id = str(item.get("fileID") or "")
+        version = versions.get(file_id)
+        if version is None:
+            raw = api.curseforge_file(int(info.project.id), int(file_id))
+            if raw:
+                hashes = raw.get("hashes") or []
+                sha1 = next(
+                    (
+                        str(entry.get("value") or "")
+                        for entry in hashes
+                        if isinstance(entry, Mapping)
+                        and int(entry.get("algo") or 0) == 1
+                    ),
+                    "",
+                )
+                version = type(
+                    "_Version",
+                    (),
+                    {
+                        "url": str(raw.get("downloadUrl") or ""),
+                        "filename": str(
+                            raw.get("fileName") or f"mod-{file_id}.jar"
+                        ),
+                        "sha1": sha1,
+                    },
+                )()
+        if version is None or not version.url:
+            logger.warning("CurseForge file %s has no download URL", file_id)
+            continue
+        items.append(
+            DownloadItem(
+                url=version.url,
+                destination=instance.path / "mods" / version.filename,
+                sha1=version.sha1,
             )
-
-    with ThreadPoolExecutor(max_workers=4) as pool:
-        futures = [pool.submit(download, item) for item in files]
-        for future in as_completed(futures):
-            future.result()
+        )
+    if items:
+        if hasattr(api, "download_files"):
+            api.download_files(items, progress=progress, cancel_event=cancel_event)
+        else:
+            for item in items:
+                api.download_file(
+                    item.url,
+                    item.destination.parent,
+                    item.destination.name,
+                    sha512=item.sha512,
+                    sha1=item.sha1,
+                    cancel_event=cancel_event,
+                )
+        _emit(progress, 96, "Моды сборки загружены", f"{len(items)} файлов")
 
 
 def _emit(progress, percent: int, title: str, detail: str) -> None:

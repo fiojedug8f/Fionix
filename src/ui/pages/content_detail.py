@@ -118,16 +118,15 @@ class DetailLoadTask(QThread):
 
     def run(self) -> None:
         try:
-            project = (
-                self._api.modrinth_project(self._project.id)
-                if self._project.source == "modrinth"
-                else self._project
-            )
-            versions = (
-                self._api.modrinth_all_versions(project.id)
-                if project.source == "modrinth"
-                else []
-            )
+            if self._project.source == "modrinth":
+                project = self._api.modrinth_project(self._project.id)
+                versions = self._api.modrinth_all_versions(project.id)
+            elif self._project.source == "curseforge":
+                project = self._api.curseforge_project(self._project.id)
+                versions = self._api.curseforge_versions(project.id)
+            else:
+                project = self._project
+                versions = []
         except Exception as exc:
             self.failed.emit(str(exc))
         else:
@@ -158,6 +157,7 @@ class VersionDownloadTask(QThread):
                 self._instance.path / folder,
                 self._version.filename,
                 sha512=self._version.sha512,
+                sha1=getattr(self._version, "sha1", ""),
             )
         except Exception as exc:
             self.failed.emit(str(exc))
@@ -188,6 +188,9 @@ class ContentDetailPage(Page):
         self._manager = QNetworkAccessManager(self)
         self._task: DetailLoadTask | None = None
         self._versions: list[MarketVersion] = []
+        self._description_is_html = False
+        self._html_source = ""
+        self._gallery_urls: set[str] = set()
 
         hero = QFrame()
         hero.setObjectName("DetailHero")
@@ -253,8 +256,7 @@ class ContentDetailPage(Page):
             "a { color: #4CC2FF; text-decoration: none; } "
             "img { max-width: 100%; margin: 8px 0; }"
         )
-        self._markdown_source = project.body or project.description
-        self._set_markdown(self._markdown_source)
+        self._set_description(project)
         self.tabs.addTab(self.description, "Описание")
         self.gallery_body = QWidget()
         self.gallery_body.setObjectName("GallerySurface")
@@ -317,7 +319,35 @@ class ContentDetailPage(Page):
             + (f" · обновлено {str(updated)[:10]}" if updated else "")
         )
 
+    def _set_description(self, project: MarketProject) -> None:
+        source = project.body or project.description or ""
+        if project.source == "curseforge" and project.body:
+            self._description_is_html = True
+            self._html_source = source
+            self.description.setHtml(source)
+            urls = set(
+                re.findall(
+                    r"<img[^>]+src=['\"](https?://[^'\"]+)",
+                    source,
+                    flags=re.IGNORECASE,
+                )
+            )
+        else:
+            self._set_markdown(source)
+            return
+        self._download_markdown_images(urls)
+
+    def _download_markdown_images(self, urls: set[str]) -> None:
+        for url in urls:
+            if url in self.description.images:
+                continue
+            reply = self._manager.get(QNetworkRequest(QUrl(url)))
+            reply.finished.connect(
+                lambda r=reply, u=url: self._on_markdown_image(r, u)
+            )
+
     def _set_markdown(self, source: str) -> None:
+        self._description_is_html = False
         self._markdown_source = source or ""
         self.description.setMarkdown(self._markdown_source)
         urls = set(
@@ -334,13 +364,7 @@ class ContentDetailPage(Page):
                 flags=re.IGNORECASE,
             )
         )
-        for url in urls:
-            if url in self.description.images:
-                continue
-            reply = self._manager.get(QNetworkRequest(QUrl(url)))
-            reply.finished.connect(
-                lambda r=reply, u=url: self._on_markdown_image(r, u)
-            )
+        self._download_markdown_images(urls)
 
     def _on_markdown_image(self, reply: QNetworkReply, url: str) -> None:
         try:
@@ -348,7 +372,10 @@ class ContentDetailPage(Page):
                 image = QImage.fromData(bytes(reply.readAll()))
                 if not image.isNull():
                     self.description.images[url] = image
-                    self.description.setMarkdown(self._markdown_source)
+                    if self._description_is_html:
+                        self.description.setHtml(self._html_source)
+                    else:
+                        self.description.setMarkdown(self._markdown_source)
         finally:
             reply.deleteLater()
 
@@ -361,7 +388,7 @@ class ContentDetailPage(Page):
     def _on_loaded(self, project: object, versions: object) -> None:
         if isinstance(project, MarketProject):
             self._project = project
-            self._set_markdown(project.body or project.description)
+            self._set_description(project)
             self.meta_label.setText(
                 f"{project.author} · {project.source}".replace(",", " ")
             )
@@ -379,10 +406,18 @@ class ContentDetailPage(Page):
                 if value:
                     links.append(f'<a href="{value}">{label}</a>')
             self.links_label.setText("Ссылки: " + " · ".join(links) if links else "")
-            gallery = project.raw.get("gallery") or []
+            gallery = (
+                project.raw.get("gallery")
+                or project.raw.get("screenshots")
+                or []
+            )
             for item in gallery[:8]:
-                if isinstance(item, dict) and item.get("url"):
-                    self._load_gallery_image(str(item["url"]))
+                if not isinstance(item, dict):
+                    continue
+                url = item.get("url") or item.get("thumbnailUrl")
+                if url and str(url) not in self._gallery_urls:
+                    self._gallery_urls.add(str(url))
+                    self._load_gallery_image(str(url))
         if isinstance(versions, list):
             self._versions = versions
             self._fill_versions(versions)

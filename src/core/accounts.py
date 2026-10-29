@@ -17,7 +17,7 @@ import time
 import uuid
 import webbrowser
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import datetime, timedelta
 from http.server import BaseHTTPRequestHandler, HTTPServer
 from pathlib import Path
 from typing import Any, Mapping
@@ -82,6 +82,8 @@ class Account:
     username: str
     uuid: str = ""
     access_token: str = ""
+    refresh_token: str = ""
+    expires_at: str = ""
     skin_url: str = ""
     created_at: str = ""
     email: str = ""
@@ -99,6 +101,38 @@ class Account:
     def is_guest(self) -> bool:
         return self.provider == "guest"
 
+    @property
+    def token_expired(self) -> bool:
+        if not self.access_token:
+            return True
+        if not self.expires_at:
+            return False
+        try:
+            expires = datetime.fromisoformat(self.expires_at)
+        except ValueError:
+            return True
+        return expires <= datetime.now() + timedelta(minutes=1)
+
+    def token_remaining_text(self) -> str:
+        if not self.access_token:
+            return "нет токена"
+        if not self.expires_at:
+            return "срок неизвестен"
+        try:
+            expires = datetime.fromisoformat(self.expires_at)
+        except ValueError:
+            return "срок неизвестен"
+        seconds = int((expires - datetime.now()).total_seconds())
+        if seconds <= 0:
+            return "истёк"
+        hours, remainder = divmod(seconds, 3600)
+        minutes = remainder // 60
+        if hours >= 24:
+            return f"{hours // 24} д {hours % 24} ч"
+        if hours:
+            return f"{hours} ч {minutes} мин"
+        return f"{max(1, minutes)} мин"
+
     def to_dict(self) -> dict[str, Any]:
         return {
             "id": self.id,
@@ -106,6 +140,8 @@ class Account:
             "username": self.username,
             "uuid": self.uuid,
             "access_token": self.access_token,
+            "refresh_token": self.refresh_token,
+            "expires_at": self.expires_at,
             "skin_url": self.skin_url,
             "created_at": self.created_at,
             "email": self.email,
@@ -125,6 +161,8 @@ class Account:
             username=username,
             uuid=account_uuid,
             access_token=str(raw.get("access_token") or ""),
+            refresh_token=str(raw.get("refresh_token") or ""),
+            expires_at=str(raw.get("expires_at") or ""),
             skin_url=str(raw.get("skin_url") or ""),
             created_at=str(raw.get("created_at") or _now_iso()),
             email=str(raw.get("email") or ""),
@@ -239,6 +277,15 @@ class AccountManager:
         if current is not None:
             return current
         return self.add(create_guest(username))
+
+    def replace(self, account: Account) -> bool:
+        with self._lock:
+            for index, current in enumerate(self.accounts):
+                if current.id == account.id:
+                    self.accounts[index] = account
+                    self.save()
+                    return True
+            return False
 
     def update_skin(self, account_id: str, skin_url: str) -> None:
         account = self.get(account_id)
@@ -451,6 +498,9 @@ def microsoft_login_url(state: str = "", redirect_uri: str | None = None) -> str
     return f"{MICROSOFT_AUTHORIZE_URL}?{query}"
 
 
+_LAST_MS_REFRESH_TOKEN = ""
+
+
 def _microsoft_token_exchange(code: str, redirect_uri: str) -> str:
     global _EXCHANGE_IN_PROGRESS
     redirect_uri = _MICROSOFT_REDIRECT_URI
@@ -507,6 +557,8 @@ def _microsoft_token_exchange(code: str, redirect_uri: str) -> str:
         token = str(payload.get("access_token") or "")
         if not token:
             raise AccountError("Microsoft не вернул access token.")
+        global _LAST_MS_REFRESH_TOKEN
+        _LAST_MS_REFRESH_TOKEN = str(payload.get("refresh_token") or "")
         return token
     except requests.RequestException as exc:
         raise AccountError("Нет связи с Microsoft OAuth.") from exc
@@ -594,6 +646,7 @@ def login_microsoft_code(code: str, redirect_uri: str | None = None) -> Account:
         raise AccountError("Код авторизации Microsoft пуст.")
     redirect = _MICROSOFT_REDIRECT_URI
     ms_token = _microsoft_token_exchange(code, redirect)
+    ms_refresh_token = _LAST_MS_REFRESH_TOKEN
     uhs, xsts_token = _xbox_authenticate(ms_token)
     try:
         mc_response = requests.post(
@@ -658,8 +711,103 @@ def login_microsoft_code(code: str, redirect_uri: str | None = None) -> Account:
         username=name,
         uuid=account_uuid,
         access_token=mc_token,
+        refresh_token=ms_refresh_token,
+        expires_at=(
+            datetime.now()
+            + timedelta(seconds=int(mc.get("expires_in") or 86400))
+        ).isoformat(timespec="seconds"),
         skin_url=skin_url,
         created_at=_now_iso(),
+    )
+
+
+def refresh_microsoft_account(account: Account) -> Account:
+    """Refresh a Microsoft account using its persisted refresh token."""
+    if account.provider != "microsoft" or not account.refresh_token:
+        raise AccountError(
+            "Для обновления токена войдите в аккаунт Microsoft заново."
+        )
+    try:
+        response = requests.post(
+            MICROSOFT_TOKEN_URL,
+            data={
+                "client_id": CLIENT_ID,
+                "grant_type": "refresh_token",
+                "refresh_token": account.refresh_token,
+                "scope": MICROSOFT_SCOPE,
+            },
+            headers=HTTP_HEADERS,
+            timeout=(10, 30),
+        )
+    except requests.RequestException as exc:
+        raise AccountError("Нет связи с Microsoft OAuth.") from exc
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = {}
+    if response.status_code >= 400:
+        raise AccountError(
+            "Сессия Microsoft истекла. Войдите в аккаунт заново."
+        )
+    ms_token = str(payload.get("access_token") or "")
+    if not ms_token:
+        raise AccountError("Microsoft не вернул новый access token.")
+    new_refresh = str(payload.get("refresh_token") or account.refresh_token)
+    uhs, xsts_token = _xbox_authenticate(ms_token)
+    try:
+        mc_response = requests.post(
+            "https://api.minecraftservices.com/authentication/login_with_xbox",
+            json={"identityToken": f"XBL3.0 x={uhs};{xsts_token}"},
+            headers=HTTP_HEADERS,
+            timeout=(10, 30),
+        )
+        if mc_response.status_code >= 400:
+            raise AccountError(
+                f"Minecraft Services отклонил обновление "
+                f"(HTTP {mc_response.status_code})."
+            )
+        mc = mc_response.json()
+    except requests.RequestException as exc:
+        raise AccountError("Не удалось обновить токен Minecraft.") from exc
+    mc_token = str(mc.get("access_token") or "")
+    if not mc_token:
+        raise AccountError("Minecraft не выдал новый access token.")
+    expires_at = (
+        datetime.now()
+        + timedelta(seconds=int(mc.get("expires_in") or 86400))
+    ).isoformat(timespec="seconds")
+    profile_name = account.username
+    profile_uuid = account.uuid
+    skin_url = account.skin_url
+    try:
+        profile_response = requests.get(
+            MINECRAFT_PROFILE_URL,
+            headers={**HTTP_HEADERS, "Authorization": f"Bearer {mc_token}"},
+            timeout=(10, 30),
+        )
+        if profile_response.status_code < 400:
+            profile = profile_response.json()
+            profile_name = str(profile.get("name") or profile_name)
+            profile_uuid = str(profile.get("id") or profile_uuid)
+            for skin in profile.get("skins", []):
+                if isinstance(skin, Mapping) and skin.get("url"):
+                    skin_url = str(skin["url"])
+                    if skin.get("state") == "ACTIVE":
+                        break
+    except (requests.RequestException, ValueError):
+        pass
+    return Account(
+        id=account.id,
+        provider="microsoft",
+        username=profile_name,
+        uuid=profile_uuid,
+        access_token=mc_token,
+        refresh_token=new_refresh,
+        expires_at=expires_at,
+        skin_url=skin_url,
+        created_at=account.created_at,
+        email=account.email,
+        skin_variant=account.skin_variant,
     )
 
 

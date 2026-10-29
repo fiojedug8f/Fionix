@@ -235,12 +235,13 @@ def main() -> int:
         window._apply_background()
         settle(120)
 
-        # Market page and its CurseForge key placeholder.
+        # Market page exposes both Modrinth and the Cloudflare-proxied CurseForge.
         window._open_instance(fabric_instance)
         window._open_market()
         settle(200)
         assert window.stack.currentWidget() is window.market_page
-        assert window.market_page.source_combo.findData("curseforge") == -1
+        assert window.market_page.source_combo.findData("curseforge") >= 0
+        assert window.sidebar.current_page() == "instance"
         window.market_page._popular_loaded = True
         window.market_page.market_tab.click()
         settle(80)

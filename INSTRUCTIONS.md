@@ -65,15 +65,24 @@ REDIRECT_URL = "http://localhost"
 
 ## CurseForge
 
-Ключ создаётся на <https://console.curseforge.com/> и задаётся **только** в
-корневом `config.py`:
+Ключ CurseForge **не хранится в лаунчере**. Запросы идут через собственный
+Cloudflare Worker, который подставляет серверный ключ (`x-api-key`) сам:
+
+1. Разверните воркер с ключом CurseForge (см. <https://console.curseforge.com/>).
+2. Пропишите его адрес в корневом `config.py`:
 
 ```python
-CURSEFORGE_API_KEY = "..."
+# можно с /v1 или без — лаунчер нормализует сам
+CURSEFORGE_API_KEY = "https://fionix-cf.<ваш-аккаунт>.workers.dev"
 ```
 
-Поля в UI для игрока нет. При пустом ключе CurseForge скрыт, Modrinth
-продолжает работать.
+В репозитории прописан рабочий воркер Fionix, поэтому CurseForge работает сразу
+после клонирования. Свой воркер подставляется заменой этой строки; пустое
+значение полностью отключает вкладку (Modrinth продолжает работать).
+Поля в UI для игрока нет.
+
+Если воркер требует Chrome-TLS (Cloudflare), лаунчер использует `curl_cffi`;
+без него остаётся обычный `requests`.
 
 ## Сборка EXE
 
@@ -81,7 +90,20 @@ CURSEFORGE_API_KEY = "..."
 python -m pip install -r requirements.txt
 python -m pip install pyinstaller
 pyinstaller Fionix.spec
-.\dist\Fionix\Fionix.exe
+.\dist\Fionix.exe
+```
+
+`Fionix.spec` сам подхватывает необязательные вещи, если они есть:
+
+- `.deps/` — локальный `pip install --target .deps` (офлайн-сборка);
+- `curl_cffi`, `keyboard`, `pywin32` — попадают в exe, если установлены;
+- `assets/fionix.manifest` — манифест Windows (DPI).
+
+Установщик (без прав администратора, ставит в `%LOCALAPPDATA%\Programs\Fionix`):
+
+```powershell
+pyinstaller Fionix.spec --distpath release-onefile
+pyinstaller Fionix_Setup.spec --distpath release-installer
 ```
 
 ## Обновления
@@ -92,8 +114,8 @@ pyinstaller Fionix.spec
 GITHUB_REPO = "owner/repo"
 ```
 
-Релиз должен содержать `.exe`-asset. Пока `GITHUB_REPO` равно `"пока нету"`,
-сетевые запросы обновления не выполняются.
+Релиз должен содержать `.exe`-asset. Пока `GITHUB_REPO` не задан, сетевые
+запросы обновления не выполняются.
 
 ## Проверки
 

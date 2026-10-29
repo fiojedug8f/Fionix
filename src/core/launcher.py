@@ -28,6 +28,7 @@ import subprocess
 import sys
 import tarfile
 import threading
+import time
 import uuid
 import zipfile
 from contextlib import contextmanager
@@ -35,6 +36,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Callable, Iterable, Mapping
+from urllib.parse import urlsplit, urlunsplit
 
 import requests
 from minecraft_launcher_lib import command as mc_command
@@ -43,13 +45,22 @@ from minecraft_launcher_lib import mod_loader as mc_mod_loader
 from PySide6.QtCore import QElapsedTimer, QObject, QTimer, Signal
 
 from src import __version__
+from src.core.async_download import DownloadItem, download_many_sync
 from src.core.config_manager import ConfigManager
 
 logger = logging.getLogger(__name__)
 
 INSTANCE_METADATA = "instance_config.json"
 LEGACY_INSTANCE_METADATA = "instance.json"
-MOJANG_VERSION_MANIFEST = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json"
+BMCLAPI_BASE = "https://bmclapi2.bangbang93.com"
+MOJANG_VERSION_MANIFEST = f"{BMCLAPI_BASE}/mc/game/version_manifest_v2.json"
+_MOJANG_MIRROR_HOSTS = {
+    "launchermeta.mojang.com",
+    "piston-meta.mojang.com",
+    "libraries.minecraft.net",
+    "resources.download.minecraft.net",
+    "launcher.mojang.com",
+}
 OPTIFINE_DOWNLOADS = "https://optifine.net/downloads"
 ADOPTIUM_API = "https://api.adoptium.net/v3/assets/latest/{major}/hotspot"
 MODRINTH_API = "https://api.modrinth.com/v2"
@@ -173,6 +184,9 @@ FALLBACK_RELEASES = (
 ProgressCallback = Callable[[int, str, str], None]
 
 _LIBRARY_RUNTIME_LOCK = threading.Lock()
+_LIBRARY_MIRROR_LOCK = threading.Lock()
+_BMCLAPI_AVAILABLE: bool | None = None
+_BMCLAPI_CHECKED_AT = 0.0
 
 
 class LauncherError(Exception):
@@ -493,6 +507,155 @@ def _library_manages_no_java():
             mc_install.install_jvm_runtime = original  # type: ignore[attr-defined]
 
 
+def bmclapi_url(url: str) -> str:
+    """Route a Mojang URL through BMCLAPI's actual resource paths."""
+    parsed = urlsplit(url)
+    host = parsed.hostname or ""
+    path = parsed.path
+    if host == "resources.download.minecraft.net":
+        path = "/assets" + path
+    elif host == "libraries.minecraft.net":
+        path = "/maven" + path
+    elif host not in _MOJANG_MIRROR_HOSTS:
+        return url
+    return urlunsplit(
+        ("https", "bmclapi2.bangbang93.com", path, parsed.query, "")
+    )
+
+
+def bmclapi_available() -> bool:
+    """Probe BMCLAPI once and cache the result to avoid per-file timeouts."""
+    global _BMCLAPI_AVAILABLE, _BMCLAPI_CHECKED_AT
+    now = time.monotonic()
+    if _BMCLAPI_AVAILABLE is not None and now - _BMCLAPI_CHECKED_AT < 600:
+        return _BMCLAPI_AVAILABLE
+    try:
+        response = requests.head(
+            MOJANG_VERSION_MANIFEST,
+            timeout=(3, 5),
+            allow_redirects=True,
+            headers=HTTP_HEADERS,
+        )
+        _BMCLAPI_AVAILABLE = response.status_code < 500
+    except requests.RequestException:
+        _BMCLAPI_AVAILABLE = False
+    _BMCLAPI_CHECKED_AT = now
+    return bool(_BMCLAPI_AVAILABLE)
+
+
+@contextmanager
+def _bmclapi_mirror():
+    """Patch minecraft-launcher-lib URL resolution for the current install."""
+    with _LIBRARY_MIRROR_LOCK:
+        from minecraft_launcher_lib import _helper as lib_helper
+
+        original_download = lib_helper.download_file
+        original_install_requests = getattr(mc_install, "requests", None)
+
+        def mirrored_download(
+            url,
+            path,
+            callback=None,
+            sha1=None,
+            lzma_compressed=False,
+            session=None,
+            minecraft_directory=None,
+            overwrite=False,
+        ):
+            if lzma_compressed:
+                return original_download(
+                    bmclapi_url(str(url)),
+                    path,
+                    callback or {},
+                    sha1=sha1,
+                    lzma_compressed=True,
+                    session=session,
+                    minecraft_directory=minecraft_directory,
+                    overwrite=overwrite,
+                )
+            target = Path(path)
+            if not bmclapi_available():
+                return original_download(
+                    str(url),
+                    path,
+                    callback or {},
+                    sha1=sha1,
+                    session=session,
+                    minecraft_directory=minecraft_directory,
+                    overwrite=overwrite,
+                )
+            if target.is_file() and not overwrite:
+                if not sha1:
+                    return False
+                import hashlib
+
+                digest = hashlib.sha1()
+                with target.open("rb") as handle:
+                    for chunk in iter(lambda: handle.read(1024 * 1024), b""):
+                        digest.update(chunk)
+                if digest.hexdigest() == sha1:
+                    return False
+            try:
+                download_many_sync(
+                    [
+                        DownloadItem(
+                            url=bmclapi_url(str(url)),
+                            destination=target,
+                            sha1=str(sha1 or ""),
+                        )
+                    ],
+                    read_timeout=8,
+                )
+            except Exception as exc:
+                global _BMCLAPI_AVAILABLE, _BMCLAPI_CHECKED_AT
+                _BMCLAPI_AVAILABLE = False
+                _BMCLAPI_CHECKED_AT = time.monotonic()
+                logger.warning("BMCLAPI download failed, falling back to Mojang: %s", exc)
+                return original_download(
+                    str(url),
+                    path,
+                    callback or {},
+                    sha1=sha1,
+                    session=session,
+                    minecraft_directory=minecraft_directory,
+                    overwrite=overwrite,
+                )
+            return True
+
+        class _MirrorRequests:
+            def __getattr__(self, name):
+                return getattr(original_install_requests, name)
+
+            def get(self, url, *args, **kwargs):
+                kwargs.setdefault("timeout", (5, 10))
+                try:
+                    return original_install_requests.get(
+                        bmclapi_url(str(url)), *args, **kwargs
+                    )
+                except requests.RequestException as exc:
+                    global _BMCLAPI_AVAILABLE, _BMCLAPI_CHECKED_AT
+                    _BMCLAPI_AVAILABLE = False
+                    _BMCLAPI_CHECKED_AT = time.monotonic()
+                    logger.warning(
+                        "BMCLAPI request failed, retrying Mojang: %s", exc
+                    )
+                    return original_install_requests.get(
+                        str(url), *args, **kwargs
+                    )
+
+        lib_helper.download_file = mirrored_download  # type: ignore[attr-defined]
+        mc_install.download_file = mirrored_download  # type: ignore[attr-defined]
+        if original_install_requests is not None:
+            mc_install.requests = _MirrorRequests()  # type: ignore[attr-defined]
+        try:
+            yield
+        finally:
+            lib_helper.download_file = original_download  # type: ignore[attr-defined]
+            mc_install.download_file = original_download  # type: ignore[attr-defined]
+            if original_install_requests is not None:
+                mc_install.requests = original_install_requests  # type: ignore[attr-defined]
+
+
 def _hidden_process_kwargs() -> dict[str, Any]:
     if sys.platform != "win32":
         return {}
@@ -592,9 +755,24 @@ class LauncherService:
 
     def fetch_release_versions(self, timeout: tuple[int, int] = (8, 15)) -> list[VersionEntry]:
         """Fetch the Mojang version manifest, newest releases first."""
-        logger.info("Fetching Mojang version manifest")
-        response = self._http_get(MOJANG_VERSION_MANIFEST, timeout=timeout)
-        response.raise_for_status()
+        global _BMCLAPI_AVAILABLE, _BMCLAPI_CHECKED_AT
+        official = "https://launchermeta.mojang.com/mc/game/version_manifest_v2.json"
+        if bmclapi_available():
+            logger.info("Fetching Minecraft version manifest via BMCLAPI")
+            try:
+                response = self._http_get(MOJANG_VERSION_MANIFEST, timeout=timeout)
+                response.raise_for_status()
+            except requests.RequestException as exc:
+                logger.warning(
+                    "BMCLAPI manifest failed, falling back to Mojang: %s", exc
+                )
+                _BMCLAPI_AVAILABLE = False
+                _BMCLAPI_CHECKED_AT = time.monotonic()
+                response = self._http_get(official, timeout=timeout)
+                response.raise_for_status()
+        else:
+            response = self._http_get(official, timeout=timeout)
+            response.raise_for_status()
         payload = response.json()
         raw_versions = payload.get("versions", []) if isinstance(payload, Mapping) else []
         entries: list[VersionEntry] = []
@@ -763,7 +941,7 @@ class LauncherService:
 
         callback = self._build_install_callback(base_progress, cancel_event)
         try:
-            with _library_manages_no_java():
+            with _library_manages_no_java(), _bmclapi_mirror():
                 mc_install.install_minecraft_version(version, str(staging_path), callback=callback)
                 self._raise_if_cancelled(cancel_event)
                 java_major = self._read_java_major(staging_path, version)

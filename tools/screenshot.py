@@ -321,10 +321,20 @@ def main() -> int:
         settle(100)
 
         # 3D skin viewer: base and outer layer with walking animation.
+        # Диалог рисует только панель, а окно-подложка прозрачное, поэтому
+        # подкладываем цвет панели — иначе заголовок «Просмотр скина»
+        # оказывается белым по белому.
         skin_dialog = SkinViewerDialog(window)
         skin_dialog.show()
         settle(600)
-        skin_dialog.grab().save(str(docs / "screenshot-skin3d.png"), "PNG")
+        shot = skin_dialog.grab().toImage()
+        panel = shot.pixelColor(shot.width() // 2, 70)
+        canvas = QImage(shot.size(), QImage.Format.Format_ARGB32)
+        canvas.fill(panel.darker(120))
+        paint_canvas = QPainter(canvas)
+        paint_canvas.drawImage(0, 0, shot)
+        paint_canvas.end()
+        canvas.save(str(docs / "screenshot-skin3d.png"), "PNG")
         skin_dialog.close()
         skin_dialog.deleteLater()
         settle(120)

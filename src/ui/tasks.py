@@ -12,12 +12,14 @@ import threading
 from PySide6.QtCore import QObject, QRunnable, QThread, Signal
 
 from src.core.accounts import (
+    Account,
     AccountError,
     fetch_minecraft_profile,
     login_elyby,
     login_littleskin,
     login_microsoft_manual,
     login_microsoft_oauth,
+    refresh_microsoft_account,
     set_minecraft_cape,
     upload_minecraft_skin,
 )
@@ -234,26 +236,47 @@ class MarketSearchTask(QThread):
         self._project_type = project_type
         self._offset = max(0, int(offset))
 
+    def _search_modrinth(self) -> list:
+        if self._popular and not self._query and self._project_type == "mod":
+            return self._api.popular_modrinth(
+                limit=20, offset=self._offset
+            )
+        return self._api.search_modrinth_type(
+            self._project_type,
+            self._query,
+            self._mc_version,
+            self._loader,
+            offset=self._offset,
+        )
+
+    def _search_curseforge(self) -> list:
+        return self._api.search_curseforge_type(
+            self._project_type,
+            self._query,
+            self._mc_version,
+            self._loader,
+            self._offset,
+        )
+
     def run(self) -> None:
         try:
-            if self._source == "curseforge":
-                projects = self._api.search_curseforge_type(
-                    self._project_type,
-                    self._query,
-                    self._mc_version,
-                    self._loader,
-                    self._offset,
-                )
-            elif self._popular and not self._query and self._project_type == "mod":
-                projects = self._api.popular_modrinth(limit=20, offset=self._offset)
+            if self._source == "all":
+                errors: list[str] = []
+                projects: list = []
+                try:
+                    projects.extend(self._search_modrinth())
+                except Exception as exc:
+                    errors.append(str(exc))
+                try:
+                    projects.extend(self._search_curseforge())
+                except Exception as exc:
+                    errors.append(str(exc))
+                if not projects and errors:
+                    raise MarketError("; ".join(errors))
+            elif self._source == "curseforge":
+                projects = self._search_curseforge()
             else:
-                projects = self._api.search_modrinth_type(
-                    self._project_type,
-                    self._query,
-                    self._mc_version,
-                    self._loader,
-                    offset=self._offset,
-                )
+                projects = self._search_modrinth()
         except MarketKeyMissing as exc:
             self.failed.emit(str(exc))
         except Exception as exc:
@@ -433,6 +456,26 @@ class UpdateDownloadTask(QThread):
             self.succeeded.emit(path)
 
 
+class TokenRefreshTask(QThread):
+    succeeded = Signal(object)  # Account
+    failed = Signal(str)
+
+    def __init__(self, account: Account, parent: QObject | None = None) -> None:
+        super().__init__(parent)
+        self._account = account
+
+    def run(self) -> None:
+        try:
+            refreshed = refresh_microsoft_account(self._account)
+        except AccountError as exc:
+            self.failed.emit(str(exc))
+        except Exception:
+            logger.exception("Token refresh failed")
+            self.failed.emit("Не удалось обновить токен аккаунта.")
+        else:
+            self.succeeded.emit(refreshed)
+
+
 class MicrosoftOAuthTask(QThread):
     succeeded = Signal(object)  # Account
     failed = Signal(str)
@@ -609,26 +652,45 @@ class ModpackSearchTask(QThread):
         self._offset = max(0, int(offset))
         self._project_type = project_type
 
+    def _modrinth(self) -> list:
+        if self._project_type == "modpack" and not self._query:
+            return self._api.popular_modpacks(self._offset)
+        return self._api.search_modrinth_type(
+            self._project_type,
+            self._query,
+            self._mc_version,
+            self._loader,
+            offset=self._offset,
+        )
+
+    def _curseforge(self) -> list:
+        return self._api.search_curseforge_type(
+            self._project_type,
+            self._query,
+            self._mc_version,
+            self._loader,
+            self._offset,
+        )
+
     def run(self) -> None:
         try:
-            if self._source == "curseforge":
-                projects = self._api.search_curseforge_type(
-                    self._project_type,
-                    self._query,
-                    self._mc_version,
-                    self._loader,
-                    self._offset,
-                )
-            elif self._project_type == "modpack" and not self._query:
-                projects = self._api.popular_modpacks(self._offset)
+            if self._source == "all":
+                errors: list[str] = []
+                projects: list = []
+                try:
+                    projects.extend(self._modrinth())
+                except Exception as exc:
+                    errors.append(str(exc))
+                try:
+                    projects.extend(self._curseforge())
+                except Exception as exc:
+                    errors.append(str(exc))
+                if not projects and errors:
+                    raise MarketError("; ".join(errors))
+            elif self._source == "curseforge":
+                projects = self._curseforge()
             else:
-                projects = self._api.search_modrinth_type(
-                    self._project_type,
-                    self._query,
-                    self._mc_version,
-                    self._loader,
-                    offset=self._offset,
-                )
+                projects = self._modrinth()
         except (MarketError, MarketKeyMissing) as exc:
             self.failed.emit(str(exc))
         except Exception:

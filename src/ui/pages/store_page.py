@@ -349,7 +349,7 @@ class StorePage(Page):
         self._cards: list[ModpackCard] = []
         self._search_task: ModpackSearchTask | None = None
         self._loaded = False
-        self._source = "modrinth"
+        self._source = "all"
         self._offset = 0
         self._has_more = False
         self._appending = False
@@ -382,9 +382,9 @@ class StorePage(Page):
         self.search_edit.returnPressed.connect(self._search)
         search_row.addWidget(self.search_edit, 1)
         self.source_combo = GlassComboBox()
+        self.source_combo.addItem("Все источники", "all")
         self.source_combo.addItem("Modrinth", "modrinth")
-        if self.api.curseforge_key:
-            self.source_combo.addItem("CurseForge", "curseforge")
+        self.source_combo.addItem("CurseForge", "curseforge")
         self.source_combo.currentIndexChanged.connect(self._on_source_changed)
         search_row.addWidget(self.source_combo)
         find = QPushButton("Найти")
@@ -397,10 +397,6 @@ class StorePage(Page):
         self.status_label = QLabel("Каталог сборок загружается…")
         self.status_label.setObjectName("Caption")
         search_layout.addWidget(self.status_label)
-        if not self.api.curseforge_key:
-            cf_note = QLabel("CurseForge временно недоступен")
-            cf_note.setObjectName("Caption")
-            search_layout.addWidget(cf_note)
         self.body.addWidget(search_card)
 
         self.grid_host = QWidget()
@@ -439,17 +435,10 @@ class StorePage(Page):
 
     def _on_source_changed(self, _index: int = -1) -> None:
         self._source = str(self.source_combo.currentData() or "modrinth")
-        if self._source == "curseforge" and not self.api.curseforge_key:
-            self._clear_cards()
-            self.status_label.setText("CurseForge временно недоступен.")
-            return
         if self._loaded:
             self._start_search()
 
     def _search(self) -> None:
-        if self._source == "curseforge" and not self.api.curseforge_key:
-            self.status_label.setText("CurseForge временно недоступен.")
-            return
         self._start_search()
 
     def _start_search(self, popular: bool = False, append: bool = False) -> None:

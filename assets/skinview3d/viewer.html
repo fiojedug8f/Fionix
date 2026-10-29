@@ -4,11 +4,12 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
 <style>
-  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #202020; }
-  #skin { display: block; width: 100%; height: 100%; outline: none; }
+  html, body { margin: 0; width: 100%; height: 100%; overflow: hidden; background: #0f131a; }
+  #skin { display: block; width: 100%; height: 100%; outline: none; cursor: grab; touch-action: none; }
+  #skin.dragging { cursor: grabbing; }
   #hint {
     position: fixed; left: 0; right: 0; bottom: 10px;
-    text-align: center; color: #9a9a9a; font: 12px "Segoe UI", sans-serif;
+    text-align: center; color: #8b95a5; font: 12px "Segoe UI", sans-serif;
     pointer-events: none; transition: opacity .2s ease;
   }
   #hint.hidden { opacity: 0; }
@@ -16,51 +17,169 @@
 </head>
 <body>
 <canvas id="skin"></canvas>
-<div id="hint">Перетащите для вращения · колесо — масштаб</div>
+<div id="hint">Зажмите ЛКМ и вращайте · колесо — масштаб</div>
 <script src="skinview3d.bundle.js"></script>
 <script>
 (function () {
   const canvas = document.getElementById("skin");
-  let currentSkin = null;
-  let viewer = null;
+  const hint = document.getElementById("hint");
 
+  let viewer = null;
+  let currentSkin = null;
+  let currentModel = "";
+  let dirty = true;
+  let holdUntil = 0;
+  let rafId = 0;
+
+  function now() {
+    return window.performance ? performance.now() : Date.now();
+  }
+
+  // ---------------------------------------------------------------- render
+  // The library renders every animation frame through an EffectComposer with
+  // an extra FXAA pass -- two fullscreen passes per frame, 60 times a second,
+  // even when nobody touches the model. That is what made rotation lag on
+  // integrated GPUs. We stop the internal loop and render only when something
+  // actually changed (drag, wheel, skin update, resize).
+  function markDirty(holdMs) {
+    dirty = true;
+    const until = now() + (holdMs || 260);
+    if (until > holdUntil) holdUntil = until;
+    requestFrame();
+  }
+
+  function requestFrame() {
+    if (!rafId) rafId = requestAnimationFrame(frame);
+  }
+
+  function frame() {
+    rafId = 0;
+    if (!viewer) return;
+    if (!dirty && now() >= holdUntil) return;   // idle: no RAF, no GPU work
+    dirty = false;
+    const controls = viewer.controls;
+    if (controls && controls.update && controls.update()) {
+      dirty = true;                              // damping still settling
+    }
+    viewer.renderer.render(viewer.scene, viewer.camera);
+    if (dirty || now() < holdUntil) requestFrame();
+  }
+
+  // ---------------------------------------------------------------- boot
   function size() {
     return [Math.max(320, window.innerWidth), Math.max(320, window.innerHeight)];
   }
 
-  function boot(skin) {
+  function readRendererName(gl) {
+    try {
+      const ext = gl.getExtension("WEBGL_debug_renderer_info");
+      return ext ? String(gl.getParameter(ext.UNMASKED_RENDERER_WEBGL)) : "";
+    } catch (e) {
+      return "";
+    }
+  }
+
+  function probeSoftware() {
+    try {
+      const probe = document.createElement("canvas");
+      const gl = probe.getContext("webgl2") || probe.getContext("webgl");
+      if (!gl) return true;
+      const name = readRendererName(gl);
+      const lose = gl.getExtension("WEBGL_lose_context");
+      if (lose) lose.loseContext();
+      return /swiftshader|software|llvmpipe|basic render/i.test(name);
+    } catch (e) {
+      return false;
+    }
+  }
+
+  function boot(skin, model) {
+    const software = probeSoftware();
     const [width, height] = size();
     viewer = new skinview3d.SkinViewer({
       canvas: canvas,
       width: width,
       height: height,
-      skin: skin
+      skin: skin,
+      antialias: !software,
+      powerPreference: "high-performance"
     });
     viewer.autoRotate = false;
-    viewer.animation = new skinview3d.WalkingAnimation();
-    viewer.controls.enablePan = false;
-    viewer.controls.enableZoom = true;
-    viewer.controls.enableRotate = true;
+    // A continuously running walking animation doubles GPU load for nothing.
+    viewer.animation = null;
+
+    if (viewer.renderer) {
+      viewer.renderer.shadowMap.enabled = false;
+      // Software WebGL: render fewer pixels and let the browser upscale.
+      viewer.renderer.setPixelRatio(
+        software ? 0.55 : Math.min(window.devicePixelRatio || 1, 1.4)
+      );
+    }
+    // Skip the composer/FXAA pipeline: one direct pass instead of three.
+    viewer.render = function () { markDirty(); };
+
+    if (viewer.controls) {
+      viewer.controls.enablePan = false;
+      viewer.controls.enableZoom = true;    // wheel
+      viewer.controls.enableRotate = true;  // left-button drag
+      viewer.controls.enableDamping = true;
+      viewer.controls.dampingFactor = 0.12;
+      viewer.controls.rotateSpeed = 0.85;
+      viewer.controls.addEventListener("change", function () { markDirty(80); });
+    }
+
+    // Replace the library's own requestAnimationFrame loop.
+    if (viewer.animationID) cancelAnimationFrame(viewer.animationID);
+    viewer.draw = function () { markDirty(); };
+
     currentSkin = skin;
+    currentModel = model || "classic";
+
+    canvas.addEventListener("pointerdown", function () {
+      canvas.classList.add("dragging");
+    });
+    window.addEventListener("pointerup", function () {
+      canvas.classList.remove("dragging");
+    });
+
+    markDirty(900);
   }
 
+  // ------------------------------------------------------------------ api
   window.fionixSkin = {
     setSkin: function (data, model) {
+      model = model || "classic";
+      if (viewer && currentSkin === data && currentModel === model) {
+        return;
+      }
       currentSkin = data;
-      if (!viewer) { boot(data); return; }
-      viewer.loadSkin(data, { model: model || "classic" });
+      currentModel = model;
+      if (!viewer) { boot(data, model); return; }
+      viewer.loadSkin(data, { model: model });
+      // The skin image is decoded asynchronously: keep rendering a little
+      // longer so the texture appears without touching the model.
+      markDirty(900);
     },
     setModel: function (model) {
-      if (viewer && currentSkin) {
-        viewer.loadSkin(currentSkin, { model: model || "classic" });
+      model = model || "classic";
+      if (viewer && currentSkin && currentModel !== model) {
+        currentModel = model;
+        viewer.loadSkin(currentSkin, { model: model });
+        markDirty(900);
       }
     },
     setCape: function (data) {
       if (!viewer) return;
       viewer.loadCape(data || null);
+      markDirty(900);
     },
     setHint: function (show) {
-      document.getElementById("hint").classList.toggle("hidden", !show);
+      hint.classList.toggle("hidden", !show);
+    },
+    setYaw: function (degrees) {
+      if (!viewer) return;
+      viewer.playerObject.rotation.y = degrees * Math.PI / 180;
+      markDirty(240);
     }
   };
 
@@ -68,6 +187,7 @@
     if (!viewer) return;
     const [width, height] = size();
     viewer.setSize(width, height);
+    markDirty(400);
   });
 })();
 </script>

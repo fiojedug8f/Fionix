@@ -103,7 +103,8 @@ from src.ui.pages.content_detail import ContentDetailPage
 from src.ui.pages.market_page import MarketPage
 from src.ui.pages.settings_page import SettingsPage
 from src.ui.pages.store_page import StorePage
-from src.ui.player import MusicPopover
+from src.ui.overlay import HOTKEY_LABEL, OverlayWindow, prepare_borderless_options
+from src.ui.player import MusicPlayer, MusicPopover
 from src.ui.sidebar import Sidebar
 from src.ui.tasks import (
     BackupTask,
@@ -113,6 +114,7 @@ from src.ui.tasks import (
     MarketInstallTask,
     ModpackLatestTask,
     ModpackProjectInstallTask,
+    TokenRefreshTask,
     UpdateCheckTask,
     UpdateDownloadTask,
 )
@@ -333,10 +335,13 @@ class MainWindow(QMainWindow):
         self.accounts = AccountManager(config.data_dir)
         self._instances: list[Instance] = []
         self._current_instance: Instance | None = None
+        self._token_refresh_task: TokenRefreshTask | None = None
+        self._overlay: OverlayWindow | None = None
         self._game_session: GameSession | None = None
         self._tray: QSystemTrayIcon | None = None
         self._tray_menu: QMenu | None = None
         self._tray_stop_action = None
+        self._tray_overlay_action = None
         self._pre_game_maximized = False
         self._hidden_for_game = False
         self._allow_close = False
@@ -347,6 +352,7 @@ class MainWindow(QMainWindow):
         self._update_info: UpdateInfo | None = None
 
         self._music_popover: MusicPopover | None = None
+        self.music = MusicPlayer(self)
         self._downloads_panel: DownloadsPanel | None = None
         self.toasts = ToastManager(self)
         self._pending_tasks: dict[str, InstallTask] = {}
@@ -450,6 +456,9 @@ class MainWindow(QMainWindow):
         self.sidebar.instance_selected.connect(self._open_instance)
         self.sidebar.account_selected.connect(self._switch_account)
         self.sidebar.profile_requested.connect(self._open_profile)
+        self.sidebar.token_refresh_requested.connect(
+            self._refresh_account_token
+        )
         self.sidebar.account_add_requested.connect(self._add_account)
 
         self.home_page.create_requested.connect(self._show_version_dialog)
@@ -463,6 +472,9 @@ class MainWindow(QMainWindow):
             self.shell.set_video_volume
         )
         self.settings_page.language_changed.connect(self._on_language_changed)
+        self.settings_page.overlay_changed.connect(
+            self._on_overlay_changed
+        )
         self.settings_page.accounts_add_requested.connect(self._add_account)
         self.settings_page.account_switch_requested.connect(self._switch_account)
         self.settings_page.account_logout_requested.connect(self._logout_account)
@@ -552,7 +564,7 @@ class MainWindow(QMainWindow):
                 self._game_session.session_seconds, self._game_session.total_playtime
             )
 
-        self.sidebar.set_active("home")
+        self.sidebar.set_active_instance(fresh.folder_name)
         self._current_page_key = "instance"
         self.stack.setCurrentWidget(self.instance_page)
         if animate:
@@ -694,7 +706,10 @@ class MainWindow(QMainWindow):
         self._detail_page = page
         self.stack.addWidget(page)
         self.stack.setCurrentWidget(page)
-        self.sidebar.set_active("home")
+        if self._current_instance is not None and self._detail_parent_key == "market":
+            self.sidebar.set_active_instance(self._current_instance.folder_name)
+        else:
+            self.sidebar.set_active("home")
         self.setWindowTitle(f"Fionix — {getattr(project, 'name', 'Контент')}")
         self._fade_in_page(page)
 
@@ -871,7 +886,7 @@ class MainWindow(QMainWindow):
         self.market_page._show_market_tab()
         self._current_page_key = "market"
         self.stack.setCurrentWidget(self.market_page)
-        self.sidebar.set_active("home")
+        self.sidebar.set_active_instance(instance.folder_name)
         self._fade_in_page(self.market_page)
         labels = {
             "mod": "Моды",
@@ -1113,6 +1128,142 @@ class MainWindow(QMainWindow):
         if not self.accounts.set_active(account_id):
             return
         self._refresh_accounts_ui()
+
+    def _on_overlay_changed(self, enabled: bool) -> None:
+        overlay = self._ensure_overlay()
+        overlay.set_enabled(enabled)
+        if not enabled:
+            return
+        if self._game_session is not None and self._game_session.is_running():
+            # The game is already running: bind to it and show the panels now.
+            QTimer.singleShot(500, self._attach_overlay)
+
+    def _ensure_overlay(self) -> OverlayWindow:
+        if self._overlay is None:
+            # The controller is a QObject without a window of its own: every
+            # panel is an independent always-on-top window, so the overlay
+            # survives the launcher window being hidden while the game runs.
+            self._overlay = OverlayWindow(self.config, music=self.music)
+            self._overlay.screenshot_saved.connect(self._on_screenshot_saved)
+            self._overlay.set_enabled(self.config.overlay_enabled)
+            logger.info(
+                "Overlay controller created (enabled=%s)",
+                self.config.overlay_enabled,
+            )
+        return self._overlay
+
+    def _on_screenshot_saved(self, path: str) -> None:
+        logger.info("Screenshot saved from the overlay: %s", path)
+        session = self._game_session
+        current = self.instance_page.current_instance()
+        if (
+            session is not None
+            and current is not None
+            and current.folder_name == session.instance.folder_name
+        ):
+            self.instance_page.refresh_screenshots()
+        self.toast(f"Скриншот сохранён: {Path(path).name}", title="Скриншот")
+
+    def _attach_overlay(self, attempt: int = 0) -> None:
+        session = self._game_session
+        if session is None or not session.is_running():
+            return
+        overlay = self._ensure_overlay()
+        if not overlay.enabled:
+            return
+        process = session.process
+        attached = False
+        if process is not None:
+            attached = overlay.attach_game(
+                int(process.pid),
+                session.instance.name,
+                session.instance.path,
+            )
+        else:
+            # Panels do not depend on the game window; show them regardless.
+            overlay.show_panels()
+        if attached:
+            return
+        # The game window appears a few seconds after the process starts (or
+        # never, when Minecraft runs windowed). Keep looking for it, but the
+        # panels are already on screen.
+        if attempt < 15:
+            QTimer.singleShot(2000, lambda: self._attach_overlay(attempt + 1))
+        else:
+            logger.warning(
+                "Overlay: Minecraft window not found after %s attempts; "
+                "the overlay is still available via %s",
+                attempt + 1,
+                HOTKEY_LABEL,
+            )
+
+    def _toggle_overlay_from_tray(self) -> None:
+        if self._game_session is None or not self._game_session.is_running():
+            self.toast(
+                "Оверлей включается автоматически при запуске игры.",
+                title="Оверлей",
+            )
+            return
+        overlay = self._ensure_overlay()
+        if not overlay.enabled:
+            self.toast(
+                "Оверлей выключен в настройках.",
+                title="Оверлей",
+            )
+            return
+        if not overlay.is_attached():
+            QTimer.singleShot(300, self._attach_overlay)
+        else:
+            overlay.toggle()
+
+
+    def _refresh_account_token(self, account_id: str) -> None:
+        account = self.accounts.get(account_id)
+        if account is None:
+            return
+        if account.provider != "microsoft":
+            self.toast(
+                "Для этого типа аккаунта обновление токена не требуется.",
+                title="Аккаунт",
+            )
+            return
+        if not account.refresh_token:
+            self.toast(
+                "Для этого аккаунта нет refresh token. "
+                "Войдите в Microsoft заново, чтобы сохранить его.",
+                error=True,
+                title="Обновление токена",
+            )
+            return
+        if (
+            self._token_refresh_task is not None
+            and self._token_refresh_task.isRunning()
+        ):
+            return
+        task = TokenRefreshTask(account, self)
+        self._token_refresh_task = task
+        task.succeeded.connect(self._on_token_refreshed)
+        task.failed.connect(
+            lambda message: self.toast(
+                message, error=True, title="Обновление токена"
+            )
+        )
+        task.finished.connect(
+            lambda: setattr(self, "_token_refresh_task", None)
+        )
+        task.finished.connect(task.deleteLater)
+        task.start()
+
+    def _on_token_refreshed(self, account: object) -> None:
+        from src.core.accounts import Account
+
+        if isinstance(account, Account):
+            self.accounts.replace(account)
+            self._refresh_accounts_ui()
+            self.toast(
+                "Токен аккаунта обновлён.",
+                title="Аккаунт",
+            )
 
     def _logout_account(self) -> None:
         current = self.accounts.current
@@ -1520,6 +1671,8 @@ class MainWindow(QMainWindow):
                 return
 
         self.instance_page.update_java_hint(f"Java {java.major} · {java.source}")
+        if self.config.overlay_enabled:
+            prepare_borderless_options(instance.path)
         loading = LaunchLoadingDialog(
             self, f"{instance.name} · проверяем файлы и готовим запуск"
         )
@@ -1563,6 +1716,12 @@ class MainWindow(QMainWindow):
         loading.deleteLater()
         self.instance_page.set_game_running()
         self.discord.set_game(instance.name)
+        if self.config.overlay_enabled:
+            self._ensure_overlay()
+            # Show the panels as soon as the Java process exists; binding to
+            # the Minecraft window keeps retrying in the background until the
+            # window appears.
+            QTimer.singleShot(1200, self._attach_overlay)
         self._enter_game_mode(instance)
 
     def _enter_game_mode(self, instance: Instance) -> None:
@@ -1574,6 +1733,8 @@ class MainWindow(QMainWindow):
         assert self._tray is not None
         if self._tray_stop_action is not None:
             self._tray_stop_action.setEnabled(True)
+        if self._tray_overlay_action is not None:
+            self._tray_overlay_action.setEnabled(self.config.overlay_enabled)
         self._tray.setToolTip(f"Fionix · {instance.name} · 00:00:00")
         self._tray.show()
         if QSystemTrayIcon.supportsMessages():
@@ -1608,6 +1769,8 @@ class MainWindow(QMainWindow):
         if session is None:
             return
         self._game_session = None
+        if self._overlay is not None:
+            self._overlay.hide_panels()
         self.discord.set_launcher()
         self._hide_tray_icon()
 
@@ -1675,6 +1838,11 @@ class MainWindow(QMainWindow):
         self._tray_stop_action = menu.addAction("Остановить игру")
         self._tray_stop_action.triggered.connect(self._stop_game_from_tray)
         self._tray_stop_action.setEnabled(False)
+        self._tray_overlay_action = menu.addAction(f"Оверлей · {HOTKEY_LABEL}")
+        self._tray_overlay_action.triggered.connect(
+            self._toggle_overlay_from_tray
+        )
+        self._tray_overlay_action.setEnabled(False)
         menu.addSeparator()
         quit_action = menu.addAction("Выход")
         quit_action.triggered.connect(self._quit_from_tray)
@@ -1705,6 +1873,8 @@ class MainWindow(QMainWindow):
     def _hide_tray_icon(self) -> None:
         if self._tray_stop_action is not None:
             self._tray_stop_action.setEnabled(False)
+        if self._tray_overlay_action is not None:
+            self._tray_overlay_action.setEnabled(False)
         if self._tray is not None:
             self._tray.hide()
 
@@ -1847,7 +2017,7 @@ class MainWindow(QMainWindow):
             self._music_popover = None
             return
 
-        popover = MusicPopover(self.title_bar.music_button)
+        popover = MusicPopover(self.title_bar.music_button, self.music)
         popover.setAttribute(Qt.WidgetAttribute.WA_DeleteOnClose, True)
         popover.destroyed.connect(self._clear_music_popover)
         self._music_popover = popover
@@ -2040,9 +2210,13 @@ class MainWindow(QMainWindow):
             return
 
         self.settings_page.flush()
+        if self._overlay is not None:
+            self._overlay.shutdown()
+            self._overlay = None
         self.market_page.shutdown()
         self.store_page.shutdown()
         self.discord.stop()
+        self.music.stop()
         if self._music_popover is not None:
             self._music_popover.close()
             self._music_popover.deleteLater()

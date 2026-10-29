@@ -121,6 +121,10 @@ class ProfileDialog(OverlayDialog):
         self.capes_status.setObjectName("Caption")
         self.capes_status.setWordWrap(True)
         capes_layout.addWidget(self.capes_status)
+        # Выбранный плащ применяется на сервере асинхронно, и профиль ещё
+        # какое-то время отдаёт старый ACTIVE — поэтому выбор держим локально.
+        self._capes: list[dict] = []
+        self._cape_id = ""
         self.capes_row = QHBoxLayout()
         self.capes_row.setSpacing(6)
         capes_layout.addLayout(self.capes_row)
@@ -258,20 +262,34 @@ class ProfileDialog(OverlayDialog):
         self.capes_status.setText(message or "Профиль Microsoft недоступен.")
 
     def _render_capes(self, account: Account, capes: list[dict]) -> None:
+        self._capes = [cape for cape in capes if isinstance(cape, dict)]
         while self.capes_row.count():
             item = self.capes_row.takeAt(0)
             widget = item.widget()
             if widget is not None:
                 widget.deleteLater()
-        active_id = ""
-        active_url = ""
-        for cape in capes:
+        server_id = ""
+        server_url = ""
+        for cape in self._capes:
             if cape.get("state") == "ACTIVE":
-                active_id = str(cape.get("id") or "")
-                active_url = str(cape.get("url") or "")
+                server_id = str(cape.get("id") or "")
+                server_url = str(cape.get("url") or "")
                 break
+        # Локальный выбор важнее серверного: после смены плаща Mojang ещё
+        # отдаёт старый ACTIVE, и галочка «залипала» на прежнем плаще.
+        known = {str(cape.get("id") or "") for cape in self._capes}
+        if self._cape_id and self._cape_id in known:
+            active_id = self._cape_id
+            active_url = next(
+                str(cape.get("url") or "")
+                for cape in self._capes
+                if str(cape.get("id") or "") == self._cape_id
+            )
+        else:
+            active_id, active_url = server_id, server_url
+            self._cape_id = server_id
         self._load_cape_texture(active_url)
-        for cape in capes:
+        for cape in self._capes:
             cape_id = str(cape.get("id") or "")
             label = str(cape.get("alias") or "Плащ")
             button = QPushButton(("✓ " if cape_id == active_id else "") + label)
@@ -313,15 +331,31 @@ class ProfileDialog(OverlayDialog):
     def _set_cape(
         self, account: Account, cape_id: str | None, cape_url: str = ""
     ) -> None:
+        # Оптимистично фиксируем выбор: сервер применит его асинхронно, а
+        # профиль ещё вернёт прежний ACTIVE. Откатим, если задача упадёт.
+        previous = self._cape_id
+        self._cape_id = cape_id or ""
         self._load_cape_texture(cape_url)
+        self._render_capes(account, self._capes)
         self.capes_status.setText("Применяем плащ…")
         task = MinecraftProfileTask(account, "cape", cape_id=cape_id, parent=self)
         task.succeeded.connect(
             lambda profile, acc=account: self._on_profile_loaded(acc, profile)
         )
-        task.failed.connect(self._on_profile_failed)
+        task.failed.connect(
+            lambda message, acc=account, old=previous: self._on_cape_failed(
+                acc, old, message
+            )
+        )
         task.finished.connect(task.deleteLater)
         task.start()
+
+    def _on_cape_failed(
+        self, account: Account, previous: str, message: str
+    ) -> None:
+        self._cape_id = previous
+        self._render_capes(account, self._capes)
+        self._on_profile_failed(message)
 
     def _on_variant_changed(self, _index: int) -> None:
         account = self._current()

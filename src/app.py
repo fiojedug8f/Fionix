@@ -5,6 +5,7 @@ from __future__ import annotations
 import ctypes
 import logging
 import logging.handlers
+import os
 import sys
 import traceback
 from pathlib import Path
@@ -88,6 +89,28 @@ def _load_bundled_fonts() -> None:
 
 
 def create_application(argv: list[str] | None = None) -> QApplication:
+    # QtWebEngine uses Chromium's GPU path for skinview3d. The blocklist is
+    # conservative on Windows drivers and silently falls back to software.
+    existing_flags = os.environ.get("QTWEBENGINE_CHROMIUM_FLAGS", "")
+    # Never let a stale system flag force Chromium into software WebGL.
+    existing_flags = (
+        existing_flags.replace("--disable-gpu", "")
+        .replace("--disable-gpu-compositing", "")
+        .replace("--use-gl=swiftshader", "")
+        .strip()
+    )
+    required_flags = (
+        "--ignore-gpu-blocklist --enable-gpu-rasterization "
+        "--use-angle=d3d11"
+    )
+    os.environ["QTWEBENGINE_CHROMIUM_FLAGS"] = (
+        f"{existing_flags} {required_flags}".strip()
+    )
+    # Must be set before QApplication; otherwise QtWebEngine may create a
+    # software OpenGL context and the skin preview drops to ~3 FPS.
+    QApplication.setAttribute(
+        Qt.ApplicationAttribute.AA_ShareOpenGLContexts, True
+    )
     QApplication.setHighDpiScaleFactorRoundingPolicy(
         Qt.HighDpiScaleFactorRoundingPolicy.PassThrough
     )
